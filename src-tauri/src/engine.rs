@@ -12,17 +12,13 @@ use crate::model::*;
 use crate::plan::{build_plan, PlanInputs};
 use crate::scan::scan_root;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 /// mtime comparison tolerance. 10ms absorbs serialization jitter without masking
 /// a genuine edit (which essentially always also changes size). Cross-filesystem
 /// rounding (FAT/exFAT 2s) merely causes a harmless one-time recopy, never loss.
 pub const DEFAULT_GRAN_NS: i64 = 10_000_000;
-
-pub fn baseline_path(state_dir: &Path, cfg: &JobConfig) -> PathBuf {
-    state_dir.join(cfg.job_id()).join("baseline.json")
-}
 
 fn load_baseline(path: &Path) -> (Baseline, BaselineStatusKind) {
     match Baseline::load(path) {
@@ -32,8 +28,8 @@ fn load_baseline(path: &Path) -> (Baseline, BaselineStatusKind) {
     }
 }
 
-pub fn baseline_status(state_dir: &Path, cfg: &JobConfig) -> BaselineStatusKind {
-    load_baseline(&baseline_path(state_dir, cfg)).1
+pub fn baseline_status(baseline_path: &Path) -> BaselineStatusKind {
+    load_baseline(baseline_path).1
 }
 
 pub fn validate_job(cfg: &JobConfig) -> Result<()> {
@@ -69,7 +65,12 @@ pub fn validate_job(cfg: &JobConfig) -> Result<()> {
 /// hit read errors — in that case deletions must be suppressed this run.
 fn scan_both(
     cfg: &JobConfig,
-) -> Result<(crate::scan::ScanResult, crate::scan::ScanResult, Vec<String>, bool)> {
+) -> Result<(
+    crate::scan::ScanResult,
+    crate::scan::ScanResult,
+    Vec<String>,
+    bool,
+)> {
     let (ra, rb) = rayon::join(
         || scan_root(&cfg.root_a, &cfg.ignore, cfg.verify_by_hash),
         || scan_root(&cfg.root_b, &cfg.ignore, cfg.verify_by_hash),
@@ -110,9 +111,9 @@ fn display_key(k: &str) -> &str {
     }
 }
 
-pub fn preview(cfg: &JobConfig, state_dir: &Path) -> Result<SyncPlan> {
+pub fn preview(cfg: &JobConfig, baseline_path: &Path) -> Result<SyncPlan> {
     validate_job(cfg)?;
-    let (base, status) = load_baseline(&baseline_path(state_dir, cfg));
+    let (base, status) = load_baseline(baseline_path);
     let (ra, rb, warnings, scan_error) = scan_both(cfg)?;
     Ok(build_plan(PlanInputs {
         cfg,
@@ -128,14 +129,14 @@ pub fn preview(cfg: &JobConfig, state_dir: &Path) -> Result<SyncPlan> {
 
 pub fn execute(
     cfg: &JobConfig,
-    state_dir: &Path,
+    baseline_path: &Path,
     resolutions: &HashMap<String, Resolution>,
     confirm_big_delete: bool,
     cancel: &AtomicBool,
     progress: impl FnMut(Progress),
 ) -> Result<ApplyReport> {
     validate_job(cfg)?;
-    let bpath = baseline_path(state_dir, cfg);
+    let bpath = baseline_path.to_path_buf();
     let (mut base, status) = load_baseline(&bpath);
     let (ra, rb, warnings, scan_error) = scan_both(cfg)?;
     let plan = build_plan(PlanInputs {
@@ -161,7 +162,15 @@ pub fn execute(
         fsops::gc_orphan_temps(parent);
     }
 
-    let report = apply_plan(cfg, &plan, resolutions, &mut base, DEFAULT_GRAN_NS, cancel, progress);
+    let report = apply_plan(
+        cfg,
+        &plan,
+        resolutions,
+        &mut base,
+        DEFAULT_GRAN_NS,
+        cancel,
+        progress,
+    );
     base.save_atomic(&bpath)?;
     Ok(report)
 }
@@ -171,6 +180,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::fs;
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
 
@@ -178,6 +188,7 @@ mod tests {
         JobConfig {
             root_a: a.to_path_buf(),
             root_b: b.to_path_buf(),
+            mode: SyncMode::TwoWay,
             ignore: Default::default(),
             verify_by_hash: false,
             big_delete_pct: 0.9,
@@ -186,9 +197,14 @@ mod tests {
         }
     }
 
+    /// Test baseline path: the explicit per-pair path the run layer now supplies.
+    fn bp(state: &Path) -> PathBuf {
+        state.join("baseline.json")
+    }
+
     fn run(cfg: &JobConfig, state: &Path) -> ApplyReport {
         let cancel = AtomicBool::new(false);
-        execute(cfg, state, &HashMap::new(), true, &cancel, |_| {}).unwrap()
+        execute(cfg, &bp(state), &HashMap::new(), true, &cancel, |_| {}).unwrap()
     }
 
     #[test]
@@ -200,15 +216,21 @@ mod tests {
 
         // 1. A has a file; first sync copies it to B (no deletes ever).
         fs::write(a.path().join("hello.txt"), "world").unwrap();
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         assert_eq!(plan.baseline_status, BaselineStatusKind::FirstSync);
         run(&cfg, state.path());
-        assert_eq!(fs::read_to_string(b.path().join("hello.txt")).unwrap(), "world");
+        assert_eq!(
+            fs::read_to_string(b.path().join("hello.txt")).unwrap(),
+            "world"
+        );
 
         // 2. B creates a new file; next sync brings it back to A.
         fs::write(b.path().join("from_b.txt"), "bbb").unwrap();
         run(&cfg, state.path());
-        assert_eq!(fs::read_to_string(a.path().join("from_b.txt")).unwrap(), "bbb");
+        assert_eq!(
+            fs::read_to_string(a.path().join("from_b.txt")).unwrap(),
+            "bbb"
+        );
 
         // 3. Modify on A; propagates to B.
         fs::write(a.path().join("hello.txt"), "world v2 longer").unwrap();
@@ -220,7 +242,7 @@ mod tests {
 
         // 4. Delete on A; propagates as a delete to B (baseline makes this safe).
         fs::remove_file(a.path().join("hello.txt")).unwrap();
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         let it = plan.items.iter().find(|i| i.path == "hello.txt").unwrap();
         assert_eq!(it.action, Action::DeleteB);
         run(&cfg, state.path());
@@ -241,7 +263,7 @@ mod tests {
         // Both sides edit f.txt differently => EditEdit conflict.
         fs::write(a.path().join("f.txt"), "AAA from a").unwrap();
         fs::write(b.path().join("f.txt"), "BB from b").unwrap();
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         let it = plan.items.iter().find(|i| i.path == "f.txt").unwrap();
         assert_eq!(it.action, Action::Conflict);
         assert_eq!(it.conflict, Some(ConflictType::EditEdit));
@@ -250,12 +272,18 @@ mod tests {
         let mut res = HashMap::new();
         res.insert("f.txt".to_string(), Resolution::KeepA);
         let cancel = AtomicBool::new(false);
-        execute(&cfg, state.path(), &res, true, &cancel, |_| {}).unwrap();
-        assert_eq!(fs::read_to_string(a.path().join("f.txt")).unwrap(), "AAA from a");
-        assert_eq!(fs::read_to_string(b.path().join("f.txt")).unwrap(), "AAA from a");
+        execute(&cfg, &bp(state.path()), &res, true, &cancel, |_| {}).unwrap();
+        assert_eq!(
+            fs::read_to_string(a.path().join("f.txt")).unwrap(),
+            "AAA from a"
+        );
+        assert_eq!(
+            fs::read_to_string(b.path().join("f.txt")).unwrap(),
+            "AAA from a"
+        );
 
         // And it's converged now: a follow-up sync is a no-op.
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         assert!(plan
             .items
             .iter()
@@ -277,11 +305,17 @@ mod tests {
         let mut res = HashMap::new();
         res.insert("doc.txt".to_string(), Resolution::KeepBoth);
         let cancel = AtomicBool::new(false);
-        execute(&cfg, state.path(), &res, true, &cancel, |_| {}).unwrap();
+        execute(&cfg, &bp(state.path()), &res, true, &cancel, |_| {}).unwrap();
 
         // A wins the canonical name on both sides...
-        assert_eq!(fs::read_to_string(a.path().join("doc.txt")).unwrap(), "from A side");
-        assert_eq!(fs::read_to_string(b.path().join("doc.txt")).unwrap(), "from A side");
+        assert_eq!(
+            fs::read_to_string(a.path().join("doc.txt")).unwrap(),
+            "from A side"
+        );
+        assert_eq!(
+            fs::read_to_string(b.path().join("doc.txt")).unwrap(),
+            "from A side"
+        );
         // ...and B's version survives as a conflict copy on BOTH sides.
         let has_conflict = |root: &Path| {
             fs::read_dir(root)
@@ -306,9 +340,13 @@ mod tests {
         // A deletes, B edits => ModifyDelete conflict.
         fs::remove_file(a.path().join("x.txt")).unwrap();
         fs::write(b.path().join("x.txt"), "edited on b").unwrap();
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         assert_eq!(
-            plan.items.iter().find(|i| i.path == "x.txt").unwrap().conflict,
+            plan.items
+                .iter()
+                .find(|i| i.path == "x.txt")
+                .unwrap()
+                .conflict,
             Some(ConflictType::ModifyDelete)
         );
 
@@ -316,13 +354,19 @@ mod tests {
         let mut res = HashMap::new();
         res.insert("x.txt".to_string(), Resolution::KeepBoth);
         let cancel = AtomicBool::new(false);
-        execute(&cfg, state.path(), &res, true, &cancel, |_| {}).unwrap();
-        assert_eq!(fs::read_to_string(a.path().join("x.txt")).unwrap(), "edited on b");
-        assert_eq!(fs::read_to_string(b.path().join("x.txt")).unwrap(), "edited on b");
+        execute(&cfg, &bp(state.path()), &res, true, &cancel, |_| {}).unwrap();
+        assert_eq!(
+            fs::read_to_string(a.path().join("x.txt")).unwrap(),
+            "edited on b"
+        );
+        assert_eq!(
+            fs::read_to_string(b.path().join("x.txt")).unwrap(),
+            "edited on b"
+        );
 
         // Converged: a follow-up sync does nothing for x.txt and spawns no extra
         // conflict copies.
-        let plan2 = preview(&cfg, state.path()).unwrap();
+        let plan2 = preview(&cfg, &bp(state.path())).unwrap();
         assert!(plan2
             .items
             .iter()
@@ -355,9 +399,114 @@ mod tests {
         f.set_modified(orig).unwrap();
         drop(f);
 
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         let it = plan.items.iter().find(|i| i.path == "f.txt").unwrap();
-        assert_eq!(it.action, Action::CopyAtoB, "verify-by-hash must catch the stealth edit");
+        assert_eq!(
+            it.action,
+            Action::CopyAtoB,
+            "verify-by-hash must catch the stealth edit"
+        );
+    }
+
+    fn mirror_cfg(a: &Path, b: &Path) -> JobConfig {
+        let mut c = cfg(a, b);
+        c.mode = SyncMode::Mirror;
+        c
+    }
+
+    fn update_cfg(a: &Path, b: &Path) -> JobConfig {
+        let mut c = cfg(a, b);
+        c.mode = SyncMode::Update;
+        c
+    }
+
+    /// S3: Update (A->B additive) converges in two runs and never writes back to
+    /// A nor deletes on B; a B-only extra is left untouched.
+    #[test]
+    fn update_converges_over_two_runs() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        let state = tempdir().unwrap();
+        let cfg = update_cfg(a.path(), b.path());
+
+        // A has a file; B has its own extra that Update must leave alone.
+        fs::write(a.path().join("from_a.txt"), "aaa").unwrap();
+        fs::write(b.path().join("b_only.txt"), "bbb").unwrap();
+
+        // Run 1: A -> B copy; B's extra untouched; A unchanged.
+        run(&cfg, state.path());
+        assert_eq!(
+            fs::read_to_string(b.path().join("from_a.txt")).unwrap(),
+            "aaa"
+        );
+        assert!(
+            b.path().join("b_only.txt").exists(),
+            "Update must not delete B-only files"
+        );
+        assert!(
+            !a.path().join("b_only.txt").exists(),
+            "Update must not write B's extra back to A"
+        );
+
+        // Run 2 converges: nothing left to do for from_a.txt.
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
+        assert!(
+            plan.items
+                .iter()
+                .all(|i| i.path != "from_a.txt" || i.action == Action::Noop),
+            "Update must converge on the second run"
+        );
+
+        // A B-side edit does NOT flow back to A under Update.
+        fs::write(b.path().join("from_a.txt"), "edited on b").unwrap();
+        run(&cfg, state.path());
+        assert_eq!(
+            fs::read_to_string(a.path().join("from_a.txt")).unwrap(),
+            "aaa",
+            "Update must never write B's edit back to A"
+        );
+    }
+
+    /// S3 end-to-end: Mirror reverts a B-side edit by overwriting B from A, and
+    /// the overwritten B edit is archived (recoverable), not silently lost.
+    #[test]
+    fn mirror_revert_overwrites_b_from_a() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        let state = tempdir().unwrap();
+        let mut cfg = mirror_cfg(a.path(), b.path());
+        cfg.use_recycle_bin = true; // archive the overwritten edit
+
+        fs::write(a.path().join("f.txt"), "canonical").unwrap();
+        run(&cfg, state.path()); // baseline; B now mirrors A
+
+        // B edits the file; Mirror must revert it (A wins).
+        fs::write(b.path().join("f.txt"), "rogue edit on b").unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
+        let it = plan.items.iter().find(|i| i.path == "f.txt").unwrap();
+        assert_eq!(
+            it.action,
+            Action::CopyAtoB,
+            "Mirror reverts a B edit via CopyAtoB"
+        );
+
+        run(&cfg, state.path());
+        assert_eq!(
+            fs::read_to_string(b.path().join("f.txt")).unwrap(),
+            "canonical",
+            "Mirror must restore A's content on B"
+        );
+        // Clean up anything archived to the recycle bin during the revert.
+        if let Ok(items) = trash::os_limited::list() {
+            let mine: Vec<_> = items
+                .into_iter()
+                .filter(|t| {
+                    t.name.to_string_lossy().contains("f.txt")
+                        && std::path::Path::new(&t.original_parent) == b.path()
+                })
+                .collect();
+            let _ = trash::os_limited::purge_all(mine);
+        }
     }
 
     #[test]
@@ -373,10 +522,10 @@ mod tests {
 
         // Corrupt the baseline, then delete the file on A. Without a trustworthy
         // baseline the engine must NOT propagate the deletion to B.
-        fs::write(baseline_path(state.path(), &cfg), b"garbage{{{").unwrap();
+        fs::write(bp(state.path()), b"garbage{{{").unwrap();
         fs::remove_file(a.path().join("keep.txt")).unwrap();
 
-        let plan = preview(&cfg, state.path()).unwrap();
+        let plan = preview(&cfg, &bp(state.path())).unwrap();
         assert_eq!(plan.baseline_status, BaselineStatusKind::Corrupt);
         assert_eq!(plan.summary.delete_a + plan.summary.delete_b, 0);
         run(&cfg, state.path());

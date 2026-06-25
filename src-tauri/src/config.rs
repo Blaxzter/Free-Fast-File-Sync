@@ -2,10 +2,11 @@
 //! baseline. Defaults are chosen to be safe: gitignore respected, deletes go to
 //! the recycle bin, and a big-delete guard trips at 25% or 100 files.
 
+use crate::model::SyncMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IgnorePolicy {
     /// Honor `.gitignore` files (and `.git/info/exclude`) found in each root.
     #[serde(default = "yes")]
@@ -37,6 +38,11 @@ impl Default for IgnorePolicy {
 pub struct JobConfig {
     pub root_a: PathBuf,
     pub root_b: PathBuf,
+    /// One-way mode post-filter. Missing on disk => `TwoWay` (the bidirectional
+    /// identity). The five-way frontend direction maps to {mode, root-swap} at
+    /// fan-out, so the engine only ever sees the A-as-source forms.
+    #[serde(default)]
+    pub mode: SyncMode,
     #[serde(default)]
     pub ignore: IgnorePolicy,
     /// Hash files whose metadata looks unchanged but whose counterpart differs,
@@ -62,15 +68,4 @@ fn default_big_delete_pct() -> f32 {
 }
 fn default_big_delete_abs() -> usize {
     100
-}
-
-impl JobConfig {
-    /// A stable identifier for this root pair, used to name the per-job state dir.
-    pub fn job_id(&self) -> String {
-        let mut h = blake3::Hasher::new();
-        h.update(self.root_a.to_string_lossy().as_bytes());
-        h.update(b"\x00");
-        h.update(self.root_b.to_string_lossy().as_bytes());
-        h.finalize().to_hex()[..16].to_string()
-    }
 }

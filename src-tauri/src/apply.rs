@@ -134,7 +134,11 @@ pub fn apply_plan(
                     path: item.path.clone(),
                     action: format!("{:?}", item.action),
                 });
-                record(&mut report, item, exec_delete(cfg, item, *side, base, gran_ns));
+                record(
+                    &mut report,
+                    item,
+                    exec_delete(cfg, item, *side, base, gran_ns),
+                );
             }
             Eff::KeepBoth => {
                 done_counter += 1;
@@ -144,7 +148,11 @@ pub fn apply_plan(
                     path: item.path.clone(),
                     action: "KeepBoth".into(),
                 });
-                record(&mut report, item, exec_keep_both(cfg, item, base, gran_ns, secs));
+                record(
+                    &mut report,
+                    item,
+                    exec_keep_both(cfg, item, base, gran_ns, secs),
+                );
             }
         }
     }
@@ -249,7 +257,13 @@ fn resolve_conflict(item: &PlanItem, res: Resolution) -> Eff {
     }
 }
 
-fn exec_copy(cfg: &JobConfig, item: &PlanItem, dir: Dir, base: &mut Baseline, gran: i64) -> Outcome {
+fn exec_copy(
+    cfg: &JobConfig,
+    item: &PlanItem,
+    dir: Dir,
+    base: &mut Baseline,
+    gran: i64,
+) -> Outcome {
     let (src_root, dst_root, src_meta, dst_meta) = match dir {
         Dir::AtoB => (&cfg.root_a, &cfg.root_b, item.a.as_ref(), item.b.as_ref()),
         Dir::BtoA => (&cfg.root_b, &cfg.root_a, item.b.as_ref(), item.a.as_ref()),
@@ -280,6 +294,19 @@ fn exec_copy(cfg: &JobConfig, item: &PlanItem, dir: Dir, base: &mut Baseline, gr
     let bytes = if src_meta.is_dir() {
         materialize(&fsops::ensure_dir(&dst_path), 0)?
     } else {
+        // Archive a pre-existing, DIFFERING destination through the deletion
+        // policy BEFORE clobbering it: overwriting live destination data (e.g. a
+        // Mirror revert of a B-side edit) is morally a delete, so the version we
+        // are about to lose must be recoverable. Only when the destination
+        // exists and is NOT already meta-equal to the source (an identical file
+        // would be a wasteful, lossless rewrite — skip archiving there).
+        if let Some(cur) = fsops::current_meta(&dst_path) {
+            if cur.is_file() && !fsops::meta_matches(Some(&cur), Some(src_meta), gran) {
+                if let Err(e) = fsops::recycle_file(&dst_path, cfg.use_recycle_bin) {
+                    return Err(classify(&e));
+                }
+            }
+        }
         match fsops::atomic_copy(&src_path, &dst_path) {
             Ok(n) => n,
             Err(e) => return Err(classify(&e)),
@@ -290,7 +317,13 @@ fn exec_copy(cfg: &JobConfig, item: &PlanItem, dir: Dir, base: &mut Baseline, gr
     Ok(bytes)
 }
 
-fn exec_delete(cfg: &JobConfig, item: &PlanItem, side: Side, base: &mut Baseline, gran: i64) -> Outcome {
+fn exec_delete(
+    cfg: &JobConfig,
+    item: &PlanItem,
+    side: Side,
+    base: &mut Baseline,
+    gran: i64,
+) -> Outcome {
     let (root, meta) = match side {
         Side::A => (&cfg.root_a, item.a.as_ref()),
         Side::B => (&cfg.root_b, item.b.as_ref()),
@@ -324,7 +357,13 @@ fn exec_delete(cfg: &JobConfig, item: &PlanItem, side: Side, base: &mut Baseline
 /// Conflict-preserving "keep both": A wins the canonical name (propagated to B),
 /// B's version is preserved under a deterministic conflict name on BOTH roots so
 /// the two sides converge and nothing is lost.
-fn exec_keep_both(cfg: &JobConfig, item: &PlanItem, base: &mut Baseline, gran: i64, secs: u64) -> Outcome {
+fn exec_keep_both(
+    cfg: &JobConfig,
+    item: &PlanItem,
+    base: &mut Baseline,
+    gran: i64,
+    secs: u64,
+) -> Outcome {
     let a_meta = item.a.as_ref();
     let b_meta = item.b.as_ref();
 
@@ -355,7 +394,13 @@ fn exec_keep_both(cfg: &JobConfig, item: &PlanItem, base: &mut Baseline, gran: i
                 }
                 base.update_entry(&cp, Some(bm.clone()));
             }
-            let bytes = place(am, &cfg.root_a, &cfg.root_b, &item.path, cfg.use_recycle_bin)?;
+            let bytes = place(
+                am,
+                &cfg.root_a,
+                &cfg.root_b,
+                &item.path,
+                cfg.use_recycle_bin,
+            )?;
             base.update_entry(&item.path, Some(am.clone()));
             Ok(bytes)
         }
@@ -363,12 +408,24 @@ fn exec_keep_both(cfg: &JobConfig, item: &PlanItem, base: &mut Baseline, gran: i
         // is nothing to keep two of — converge by promoting the surviving version
         // to the canonical name on both sides so it stops re-conflicting forever.
         (Some(am), None) => {
-            let bytes = place(am, &cfg.root_a, &cfg.root_b, &item.path, cfg.use_recycle_bin)?;
+            let bytes = place(
+                am,
+                &cfg.root_a,
+                &cfg.root_b,
+                &item.path,
+                cfg.use_recycle_bin,
+            )?;
             base.update_entry(&item.path, Some(am.clone()));
             Ok(bytes)
         }
         (None, Some(bm)) => {
-            let bytes = place(bm, &cfg.root_b, &cfg.root_a, &item.path, cfg.use_recycle_bin)?;
+            let bytes = place(
+                bm,
+                &cfg.root_b,
+                &cfg.root_a,
+                &item.path,
+                cfg.use_recycle_bin,
+            )?;
             base.update_entry(&item.path, Some(bm.clone()));
             Ok(bytes)
         }
@@ -403,7 +460,9 @@ fn place(meta: &Meta, src_root: &Path, dst_root: &Path, key: &str, use_recycle: 
                 }
             }
         }
-        fsops::ensure_dir(&dst).map(|()| 0).map_err(|e| classify(&e))
+        fsops::ensure_dir(&dst)
+            .map(|()| 0)
+            .map_err(|e| classify(&e))
     } else {
         Ok(0)
     }
@@ -483,13 +542,155 @@ mod tests {
         assert_eq!(conflict_name("noext", "A", 7), "noext.sync-conflict-7-A");
     }
 
+    fn file_meta(p: &Path) -> Meta {
+        fsops::current_meta(p).unwrap()
+    }
+
+    /// S3: exec_copy must archive a pre-existing, DIFFERING destination through
+    /// the deletion policy BEFORE clobbering it, so a Mirror revert of a B edit
+    /// is recoverable rather than silently overwritten.
+    #[test]
+    fn mirror_revert_archives_overwritten_b() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        // A holds the source-of-truth content; B holds a DIFFERENT (edited) copy.
+        std::fs::write(a.path().join("f.txt"), b"A-source").unwrap();
+        std::fs::write(b.path().join("f.txt"), b"B-edited-and-longer").unwrap();
+
+        let cfg = JobConfig {
+            root_a: a.path().to_path_buf(),
+            root_b: b.path().to_path_buf(),
+            mode: SyncMode::Mirror,
+            ignore: Default::default(),
+            verify_by_hash: false,
+            big_delete_pct: 0.9,
+            big_delete_abs: 10_000,
+            use_recycle_bin: true, // route the overwritten B edit to the recycle bin
+        };
+
+        let a_meta = file_meta(&a.path().join("f.txt"));
+        let b_meta = file_meta(&b.path().join("f.txt"));
+        let item = PlanItem {
+            path: "f.txt".to_string(),
+            action: Action::CopyAtoB,
+            conflict: None,
+            a_change: ChangeKind::Unchanged,
+            b_change: ChangeKind::Modified,
+            a: Some(a_meta),
+            b: Some(b_meta),
+            base: None,
+            default_resolution: None,
+            resolution_options: vec![],
+            note: String::new(),
+        };
+
+        let mut base = Baseline::default();
+        let out = exec_copy(&cfg, &item, Dir::AtoB, &mut base, 0);
+        assert!(
+            out.is_ok(),
+            "exec_copy failed: {:?}",
+            out.err().map(|_| "err")
+        );
+
+        // B now carries A's content...
+        assert_eq!(std::fs::read(b.path().join("f.txt")).unwrap(), b"A-source");
+        // ...and the overwritten B edit was archived (moved to the recycle bin),
+        // not hard-deleted: it is recoverable from the OS trash.
+        if let Ok(items) = trash::os_limited::list() {
+            let archived = items.iter().any(|t| {
+                t.name.to_string_lossy().contains("f.txt")
+                    && std::path::Path::new(&t.original_parent) == b.path()
+            });
+            // Best-effort: clean up what we put in the bin to avoid clutter.
+            let to_purge: Vec<_> = items
+                .into_iter()
+                .filter(|t| {
+                    t.name.to_string_lossy().contains("f.txt")
+                        && std::path::Path::new(&t.original_parent) == b.path()
+                })
+                .collect();
+            if !to_purge.is_empty() {
+                let _ = trash::os_limited::purge_all(to_purge);
+            }
+            assert!(archived, "overwritten B edit must land in the recycle bin");
+        }
+    }
+
+    /// Control: an IDENTICAL destination must NOT be archived (no needless trash
+    /// churn) — meta-equal destinations skip the archival branch.
+    #[test]
+    fn exec_copy_identical_dst_is_not_archived() {
+        let a = tempdir().unwrap();
+        let b = tempdir().unwrap();
+        std::fs::write(a.path().join("f.txt"), b"same").unwrap();
+        std::fs::write(b.path().join("f.txt"), b"same").unwrap();
+        // Align mtime so meta_matches is true.
+        let am = file_meta(&a.path().join("f.txt"));
+        let bp = b.path().join("f.txt");
+        let f = std::fs::OpenOptions::new().write(true).open(&bp).unwrap();
+        if let Some(t) = std::time::SystemTime::UNIX_EPOCH
+            .checked_add(std::time::Duration::from_nanos(am.mtime_ns.max(0) as u64))
+        {
+            f.set_modified(t).unwrap();
+        }
+        drop(f);
+
+        let cfg = JobConfig {
+            root_a: a.path().to_path_buf(),
+            root_b: b.path().to_path_buf(),
+            mode: SyncMode::Mirror,
+            ignore: Default::default(),
+            verify_by_hash: false,
+            big_delete_pct: 0.9,
+            big_delete_abs: 10_000,
+            use_recycle_bin: true,
+        };
+        let item = PlanItem {
+            path: "f.txt".to_string(),
+            action: Action::CopyAtoB,
+            conflict: None,
+            a_change: ChangeKind::Unchanged,
+            b_change: ChangeKind::Modified,
+            a: Some(file_meta(&a.path().join("f.txt"))),
+            b: Some(file_meta(&bp)),
+            base: None,
+            default_resolution: None,
+            resolution_options: vec![],
+            note: String::new(),
+        };
+        let mut base = Baseline::default();
+        // gran large enough to treat the aligned mtimes as equal.
+        assert!(exec_copy(&cfg, &item, Dir::AtoB, &mut base, 1_000_000_000).is_ok());
+        assert_eq!(std::fs::read(&bp).unwrap(), b"same");
+        // Nothing newly archived for this identical destination.
+        if let Ok(items) = trash::os_limited::list() {
+            let leaked: Vec<_> = items
+                .into_iter()
+                .filter(|t| {
+                    t.name.to_string_lossy().contains("f.txt")
+                        && std::path::Path::new(&t.original_parent) == b.path()
+                })
+                .collect();
+            assert!(
+                leaked.is_empty(),
+                "identical destination must not be archived"
+            );
+            let _ = trash::os_limited::purge_all(leaked);
+        }
+    }
+
     #[test]
     fn revalidate_detects_drift() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("f"), b"hello").unwrap();
         let cur = fsops::current_meta(&dir.path().join("f")).unwrap();
         assert!(revalidate(dir.path(), "f", Some(&cur), 0));
-        let stale = Meta { kind: EntryKind::File, size: 999, mtime_ns: cur.mtime_ns, hash: None };
+        let stale = Meta {
+            kind: EntryKind::File,
+            size: 999,
+            mtime_ns: cur.mtime_ns,
+            hash: None,
+        };
         assert!(!revalidate(dir.path(), "f", Some(&stale), 0));
     }
 }

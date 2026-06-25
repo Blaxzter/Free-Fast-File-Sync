@@ -35,6 +35,24 @@ impl Meta {
     }
 }
 
+/// One-way post-filter applied to each reconcile `Decision`. It NEVER forks the
+/// 25-cell truth table; it is a pure transform of the table's output. `A` is
+/// always the canonical "source" for Mirror/Update — the UI flips roots (the
+/// five-way `SyncDirection`) by swapping which root is passed as `root_a` in the
+/// fan-out helper, so the engine only ever sees the A-as-source forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SyncMode {
+    /// Bidirectional reconciliation — the identity post-filter.
+    #[default]
+    TwoWay,
+    /// `A` is source of truth; `B` becomes a faithful copy of `A` (extras on `B`
+    /// are deleted, `B`-side edits are reverted, conflicts collapse to "A wins").
+    Mirror,
+    /// `A -> B` additive: copy new/changed `A` onto `B`, never delete on `B`,
+    /// never write back to `A`. `B`-only files are left untouched.
+    Update,
+}
+
 /// A side's change relative to the baseline (prior-sync state).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChangeKind {
@@ -103,10 +121,16 @@ pub struct Decision {
 
 impl Decision {
     pub fn plain(action: Action) -> Self {
-        Decision { action, conflict: None }
+        Decision {
+            action,
+            conflict: None,
+        }
     }
     pub fn conflict(ct: ConflictType) -> Self {
-        Decision { action: Action::Conflict, conflict: Some(ct) }
+        Decision {
+            action: Action::Conflict,
+            conflict: Some(ct),
+        }
     }
     #[allow(dead_code)] // used by the reconcile test suite
     pub fn is_conflict(&self) -> bool {

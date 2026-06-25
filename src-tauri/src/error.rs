@@ -30,6 +30,21 @@ pub enum SyncError {
     #[error("invalid job: {0}")]
     InvalidJob(String),
 
+    #[error("another sync is already running (run {run_id})")]
+    Busy { run_id: String },
+
+    /// A run id the registry doesn't know (stale UI / already finished). Wired
+    /// into the apply-promotion path in S6.
+    #[allow(dead_code)]
+    #[error("unknown run")]
+    UnknownRun,
+
+    /// The run's cancel token was flipped before/at apply start. Surfaced by the
+    /// apply-promotion path in S6.
+    #[allow(dead_code)]
+    #[error("run was cancelled")]
+    Cancelled,
+
     #[error("{0}")]
     Other(String),
 }
@@ -53,7 +68,10 @@ impl SyncError {
         }
         match e.kind() {
             std::io::ErrorKind::PermissionDenied => SyncError::PermissionDenied { path: p },
-            _ => SyncError::Io { path: p, msg: e.to_string() },
+            _ => SyncError::Io {
+                path: p,
+                msg: e.to_string(),
+            },
         }
     }
 
