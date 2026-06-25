@@ -1,0 +1,40 @@
+[package]
+name = "fast-file-sync"
+version = "0.1.0"
+description = "Reliable fast two-way file sync that respects .gitignore"
+authors = ["Frederic Abraham"]
+edition = "2021"
+rust-version = "1.77.2"
+
+# Tauri 2 requires the lib+bin split (also makes the engine unit-testable
+# without spinning up a window).
+[lib]
+name = "fast_file_sync_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+ignore = "0.4.26"
+blake3 = "1.8.5"
+rayon = "1.12.0"
+unicode-normalization = "0.1"
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+trash = "5.2.6"
+roxmltree = "0.20"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Smaller, faster binaries for a file tool.
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
