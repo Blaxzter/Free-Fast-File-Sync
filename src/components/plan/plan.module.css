@@ -1,0 +1,155 @@
+/* Compare grid + plan-related components. The grid is a fixed-column layout so
+ * mono paths stay aligned; rows are virtualized in PlanGrid. */
+
+.changeGlyph {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+.dirArrow {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono);
+}
+
+.conflictTag {
+  margin-left: var(--sp-2);
+}
+
+/* ---- Summary chips row ---- */
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) 0;
+}
+.summaryGrow {
+  flex: 1;
+}
+.summaryCallout {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--conflict-fg);
+}
+.showInSync {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+/* ---- Compare grid ---- */
+.gridWrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.gridHeader,
+.gridRow {
+  display: grid;
+  grid-template-columns: 24px minmax(240px, 1fr) 64px 28px 64px 110px 90px 150px;
+  align-items: center;
+  column-gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+}
+
+.gridHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 28px;
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.gridScroll {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.gridRow {
+  height: var(--row-h);
+  border-bottom: 1px solid var(--border-subtle);
+  border-left: 2px solid transparent;
+}
+.gridRow:hover {
+  background: var(--bg-hover);
+}
+.rowConflict {
+  background: color-mix(in srgb, var(--conflict-bg) 20%, transparent);
+  border-left-color: var(--conflict-fg);
+}
+.rowDanger {
+  background: color-mix(in srgb, var(--danger-bg) 20%, transparent);
+  border-left-color: var(--danger-fg);
+}
+
+.cellPath {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.pathParent {
+  color: var(--text-muted);
+}
+.pathBase {
+  color: var(--text);
+}
+
+.cellCenter {
+  display: flex;
+  justify-content: center;
+}
+.cellSize {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono);
+  text-align: right;
+  color: var(--text-secondary);
+  font-feature-settings: "tnum" 1;
+}
+.cellResolve {
+  display: flex;
+}
+
+.gridEmpty {
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* ---- Baseline badge ---- */
+.baselineBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 22px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}

@@ -1,0 +1,92 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  max-width: 820px;
+}
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.sectionTitle {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.sectionDesc {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.importList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.importJob {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.importPaths {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono-sm);
+}
+.importPaths code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arrow {
+  color: var(--text-faint);
+}
+.importMeta {
+  display: flex;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.tagchip {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--neutral-bg);
+  color: var(--text-secondary);
+  font-size: var(--fs-micro);
+}
+.tagWarn {
+  color: var(--warn-fg);
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+.tagTwo {
+  color: var(--copy-fg);
+  border-color: var(--copy-border);
+  background: var(--copy-bg);
+}
+.notes {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.notes ul {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-6);
+}

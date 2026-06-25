@@ -1,0 +1,158 @@
+/* Compare Workspace (Job Detail) layout. */
+
+.workspace {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+/* Job header card */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.headerTop {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.headerTitle {
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--text);
+}
+.headerChips {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.modeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 20px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--neutral-bg);
+  border: 1px solid var(--neutral-border);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+}
+
+/* Roots row: two folder pickers + swap */
+.roots {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  gap: var(--sp-5);
+}
+.swap {
+  align-self: center;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  padding-bottom: var(--sp-4);
+}
+.folder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.folderLabel {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.sidePill {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  color: var(--text-on-accent);
+}
+.folderRow {
+  display: flex;
+  gap: var(--sp-3);
+}
+.pathInput {
+  flex: 1;
+  min-width: 0;
+  height: var(--ctrl-h);
+  padding: 0 10px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono);
+  text-overflow: ellipsis;
+}
+.pathInput:hover {
+  border-color: var(--border-strong);
+}
+
+/* Options strip */
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-6);
+  padding: var(--sp-4) 0;
+}
+.optGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.optLegend {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* Report */
+.reportChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: center;
+}
+
+.warnings {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.warnings ul {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-6);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}

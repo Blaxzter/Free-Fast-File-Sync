@@ -1,0 +1,262 @@
+/* Shared primitive components: Button, Chip, Badge, Banner, StatusDot, Toggle,
+ * Select, EmptyState. Token-driven; no hardcoded meaning hex. */
+
+/* ---- Button ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: var(--ctrl-h);
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.secondary {
+  background: var(--bg-surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.secondary:not(:disabled):hover {
+  background: #232c38;
+  border-color: var(--border-strong);
+}
+
+.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+.primary:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+.primary:not(:disabled):active {
+  background: var(--accent-press);
+}
+
+.go {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-fg);
+}
+.go:not(:disabled):hover {
+  background: #143020;
+}
+
+.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+  color: var(--danger-fg);
+}
+.danger:not(:disabled):hover {
+  background: #3a1414;
+}
+
+.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.ghost:not(:disabled):hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.iconBtn {
+  width: var(--ctrl-h-sm);
+  height: var(--ctrl-h-sm);
+  padding: 0;
+  justify-content: center;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+}
+.iconBtn:not(:disabled):hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.small {
+  height: var(--ctrl-h-sm);
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+}
+
+/* ---- Chip (summary pill) ---- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 22px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.chip b {
+  font-weight: 700;
+}
+
+/* ---- Badge (action / tag) ---- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 20px;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.badgeOutline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  background: transparent;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+}
+
+/* ---- StatusDot ---- */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex: none;
+}
+.dotLg {
+  width: 10px;
+  height: 10px;
+}
+.dotLive {
+  box-shadow: 0 0 0 2px var(--bg-base);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ---- Banner ---- */
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  font-size: var(--fs-sm);
+  background: var(--bg-surface);
+}
+.bannerIcon {
+  flex: none;
+  margin-top: 1px;
+}
+.bannerBody {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- Toggle ---- */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.toggleTrack {
+  position: relative;
+  width: 30px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-3);
+  border: 1px solid var(--border);
+  transition: background var(--dur-fast) var(--ease);
+  flex: none;
+}
+.toggleOn {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggleKnob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--text);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.toggleOn .toggleKnob {
+  transform: translateX(14px);
+}
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* ---- Select ---- */
+.select {
+  height: var(--ctrl-h-sm);
+  padding: 0 var(--sp-4);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.select:hover {
+  border-color: var(--border-strong);
+}
+
+/* ---- EmptyState ---- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--sp-4);
+  max-width: 420px;
+  margin: var(--sp-9) auto;
+  padding: var(--sp-9);
+}
+.emptyIcon {
+  color: var(--text-muted);
+}
+.emptyTitle {
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: 650;
+  color: var(--text);
+}
+.emptySub {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.emptyActions {
+  display: flex;
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+}

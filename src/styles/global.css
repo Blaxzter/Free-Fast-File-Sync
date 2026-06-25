@@ -1,0 +1,98 @@
+/* Global resets + shell layout. Component-local styles live in CSS Modules. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+html {
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--text);
+  background: var(--bg-base);
+  font-feature-settings: "tnum" 1, "ss01" 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text);
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+/* Keyboard focus always legible; mouse focus does not show the ring. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
+  border-radius: var(--radius-sm);
+}
+
+/* Monospace utility for filesystem paths/globs/hashes/sizes. */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+}
+
+/* Custom scrollbars matching the dark surfaces. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-inset);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--bg-inset);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

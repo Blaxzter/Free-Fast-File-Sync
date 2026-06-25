@@ -13,10 +13,16 @@
     "app:build": "tauri build"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.101.1",
+    "@tanstack/react-router": "^1.170.16",
+    "@tanstack/react-virtual": "^3.14.3",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.1",
+    "lucide-react": "^1.21.0",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "zod": "^4.4.3",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.3",

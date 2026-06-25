@@ -1,7 +1,13 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+/* TS bindings mirroring the Rust engine serde output (src-tauri/src/model.rs,
+ * config.rs, ffs_import.rs). Hand-maintained for Phase 0; mirrored by Zod
+ * schemas in domain/schemas.ts and parsed at the IPC boundary so a serde
+ * mismatch fails loudly in dev. Keep field names exactly as serde emits them. */
 
-// ---- Types mirroring the Rust engine (serde output) ----
+// ---- model.rs enums (serialize to plain enum-variant strings) ----
+
+export type EntryKind = "File" | "Dir" | "Symlink" | "Other";
+
+export type ChangeKind = "Unchanged" | "Created" | "Modified" | "Deleted" | "TypeChanged";
 
 export type Action =
   | "Noop"
@@ -11,8 +17,6 @@ export type Action =
   | "DeleteB"
   | "UpdateBaselineOnly"
   | "Conflict";
-
-export type ChangeKind = "Unchanged" | "Created" | "Modified" | "Deleted" | "TypeChanged";
 
 export type ConflictType =
   | "EditEdit"
@@ -34,7 +38,10 @@ export type Resolution =
   | "Skip";
 
 export type BaselineStatusKind = "Present" | "FirstSync" | "Corrupt";
-export type EntryKind = "File" | "Dir" | "Symlink" | "Other";
+
+export type ItemStatus = "Done" | "Skipped" | "Failed" | "Conflict";
+
+// ---- model.rs structs ----
 
 export interface Meta {
   kind: EntryKind;
@@ -90,7 +97,7 @@ export interface SyncPlan {
 export interface ItemOutcome {
   path: string;
   action: Action;
-  status: "Done" | "Skipped" | "Failed" | "Conflict";
+  status: ItemStatus;
   error?: string;
 }
 
@@ -102,6 +109,8 @@ export interface ApplyReport {
   bytes_copied: number;
   outcomes: ItemOutcome[];
 }
+
+// ---- config.rs ----
 
 export interface IgnorePolicy {
   use_gitignore: boolean;
@@ -120,12 +129,16 @@ export interface JobConfig {
   use_recycle_bin: boolean;
 }
 
+// ---- lib.rs event payload (sync://progress) ----
+
 export interface Progress {
   done: number;
   total: number;
   path: string;
   action: string;
 }
+
+// ---- ffs_import.rs ----
 
 export interface ImportedJob {
   name: string;
@@ -143,45 +156,3 @@ export interface FfsImport {
   jobs: ImportedJob[];
   notes: string[];
 }
-
-// A SyncError serializes as { kind, detail }.
-export interface SyncError {
-  kind: string;
-  detail?: unknown;
-}
-
-export function errorMessage(e: unknown): string {
-  if (e && typeof e === "object" && "kind" in e) {
-    const se = e as SyncError;
-    const detail =
-      typeof se.detail === "string"
-        ? se.detail
-        : se.detail
-          ? JSON.stringify(se.detail)
-          : "";
-    return detail ? `${se.kind}: ${detail}` : se.kind;
-  }
-  return String(e);
-}
-
-// ---- Command wrappers ----
-
-export const validateJob = (cfg: JobConfig) => invoke<void>("validate_job", { cfg });
-
-export const getBaselineStatus = (cfg: JobConfig) =>
-  invoke<BaselineStatusKind>("get_baseline_status", { cfg });
-
-export const previewSync = (cfg: JobConfig) => invoke<SyncPlan>("preview_sync", { cfg });
-
-export const executeSync = (
-  cfg: JobConfig,
-  resolutions: Record<string, Resolution>,
-  confirmBigDelete: boolean,
-) => invoke<ApplyReport>("execute_sync", { cfg, resolutions, confirmBigDelete });
-
-export const cancelSync = () => invoke<void>("cancel_sync");
-
-export const importFfs = (path: string) => invoke<FfsImport>("import_ffs", { path });
-
-export const onProgress = (cb: (p: Progress) => void): Promise<UnlistenFn> =>
-  listen<Progress>("sync://progress", (e) => cb(e.payload));
