@@ -1063,6 +1063,24 @@ I have everything I need. The engine already supplies `resolution_options` and `
   - Since today's `execute_sync` runs one `JobConfig`, multi-pair jobs need a per-pair invocation wrapper: **NEW** `execute_pair_sync(job_id, pair_id, resolutions, confirm_big_delete)` (and `preview_pair_sync(job_id, pair_id)`) that resolves a `FolderPair` → existing `JobConfig` and calls the unchanged engine.
 - **NEW events:** `watch://conflicts-detected { job_id, pair_id, count }` (drives the AUTO-PAUSED watch badge), and `sync://item-outcome { ItemOutcome }` (optional finer-grained streaming so failed rows render live rather than only in the final `ApplyReport`).
 
+**(7) Planned enhancements — NOT yet implemented (in the plan, to reduce per-conflict toil):**
+
+Two requested capabilities. Both build on primitives the engine already exposes — `resolution_options`, `default_resolution`, and the `resolutions: HashMap<path, Resolution>` that `execute_sync` already takes — so neither requires a change to the `reconcile` truth table. Neither is built in Phase 0.
+
+- **A. "Peek both" — side-by-side / diff preview for text conflicts.** Goal: before picking a resolution, see *what* differs, not just the size/mtime/hash grid.
+  - *UI:* upgrade the detail panel's single preview pane into a two-column **A │ B text view** for text files, with line-level diff highlighting (add/remove/change in OK-green/DELETE-orange/WARN), synced scroll, and a wrap toggle; a **unified-diff** toggle for narrow panel widths. Images → side-by-side thumbnails (already hinted). Binary / too-large → keep today's "no preview" + the metadata diff grid.
+  - *Detection:* text-vs-binary by NUL-byte sniff on a head slice + a size cap (e.g. 2 MiB head); a `max_bytes` guard so a huge file never blocks the panel (shows `truncated`).
+  - *Backend:* the already-listed NEW `get_preview_content(cfg, path, side, max_bytes) -> PreviewBlob{ kind, text/bytes, truncated }`, fetched for **both** sides. The diff itself is computed client-side (small Myers/LCS) to keep the engine IO-only; a server-side `get_text_diff` can come later if we ever need to diff very large files off the UI thread.
+  - *Capability-gated:* peek/diff needs a backend that supports random-access reads. Per the swappable-backend decision, a backend advertises `can_preview` in its capability list; remote/cloud backends that can't cheaply read both sides degrade to metadata-only (the pane shows "preview unavailable on this backend"). Read-only — never mutates, respects the same filter + `validate_representable` rules.
+  - *Phase:* read-side (the command + two-column view) lands with **Phase 1**; diff polish + image/large-file handling in **Phase 2**.
+
+- **B. Standing conflict policy — "always resolve conflicts as X".** Goal: a set-and-forget rule so recurring conflicts don't demand manual clicks every run (FreeFileSync-style, but safer).
+  - *Config:* a NEW `conflict_policy` field with scope levels, most-specific-wins: **global default → per-Job → per-FolderPair**. `ConflictPolicy = AlwaysAsk (default) | KeepNewer | KeepBoth | KeepA | KeepB | Skip | AutoSafe`.
+  - *Semantics:* a non-`AlwaysAsk` policy runs a **pre-pass that fills the `resolutions` map** for every conflict whose `resolution_options` contains that choice; conflicts where the policy doesn't apply fall back to `AlwaysAsk` (still surfaced). `AutoSafe` applies only **non-destructive** resolutions (`KeepBoth`, and `KeepNewer` where unambiguous) and holds the rest. The engine needs no change — it already consumes the map.
+  - *HARD safety carve-outs (never auto-resolved, regardless of policy):* `StateDesync` always falls to `Skip` + surface; anything that would trip the **big-delete guard** pauses and notifies instead of auto-running. Destructive auto-resolutions still route overwrites/deletes through the recycle bin and still count toward the big-delete guard.
+  - *UI:* a `conflict_policy` select in the Job Editor + a per-pair override; the Conflict panel shows a "policy: Keep newer (auto)" chip and marks which rows it pre-resolved, with one-click **review/override** so auto never hides what it did. The existing schedule "on-conflict" options (Notify / Auto-safe / Skip-run) become the **unattended projection** of this same policy rather than a separate concept.
+  - *Phase:* per-Job/per-pair policy lands with **Phase 1** (persisted Jobs); the auto-on-watch / scheduled projection in **Phase 2**.
+
 ---
 
 I have enough grounding from the model, config, and the design system cheatsheet. Here is the deliverable.
