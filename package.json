@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "tauri dev",
-    "app:build": "tauri build"
+    "app:build": "tauri build",
+    "gen:testdata": "node scripts/gen-testdata.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.1",
