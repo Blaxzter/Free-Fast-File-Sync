@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node", "@wdio/globals/types", "@wdio/mocha-framework"],
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "isolatedModules": true
+  },
+  "include": [
+    "playwright.config.ts",
+    "wdio.conf.ts",
+    "e2e/**/*.ts",
+    "e2e-native/**/*.ts"
+  ]
+}

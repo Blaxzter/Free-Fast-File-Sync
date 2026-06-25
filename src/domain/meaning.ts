@@ -14,7 +14,9 @@ import type {
   BaselineStatusKind,
   ChangeKind,
   ConflictType,
+  DeletionPolicy,
   ItemStatus,
+  SyncMode,
 } from "../ipc/bindings";
 
 /** A meaning entry: CSS var names + display strings. */
@@ -85,6 +87,22 @@ export const STATUS_MEANING: Record<ItemStatus, Meaning> = {
   Skipped: meaning("neutral", "skipped"),
   Failed: meaning("danger", "failed"),
   Conflict: meaning("conflict", "conflict"),
+};
+
+/** SyncMode -> meaning (mode badge in the job editor / pair header).
+ * TwoWay is neutral (no one-way risk), Mirror is warn-tinted (destructive: B
+ * becomes a faithful copy of A, B-side extras deleted), Update is copy-blue
+ * (additive A→B, never deletes). */
+export const MODE_MEANING: Record<SyncMode, Meaning> = {
+  TwoWay: meaning("neutral", "two-way", "↔"),
+  Mirror: meaning("warn", "mirror", "→"),
+  Update: meaning("copy", "update", "→"),
+};
+
+/** DeletionPolicy -> meaning, keyed by the serde `kind` discriminant strings. */
+export const DELETION_MEANING: Record<DeletionPolicy["kind"], Meaning> = {
+  RecycleBin: meaning("ok", "Recycle Bin", "♺"),
+  Permanent: meaning("danger", "Permanent", "✕"),
 };
 
 /** Human labels for Resolution options (no color of their own). */

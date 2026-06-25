@@ -1,0 +1,264 @@
+/* Job list rows + Job Editor layout. Token-driven; no hardcoded meaning hex
+ * (mode/deletion/baseline colors come from meaning.ts via inline vars). */
+
+/* ---- ModeBadge ---- */
+.modeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 20px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* ---- Jobs list ---- */
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.listHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.listTitle {
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: 650;
+  color: var(--text);
+}
+.listActions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* ---- JobRow ---- */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  text-align: left;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.row:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.rowSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  background: var(--text-faint);
+}
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  flex: 1;
+}
+.rowName {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--text);
+}
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.rowBaseline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+/* ---- Editor ---- */
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  max-width: 860px;
+}
+.editorHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.editorTitle {
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: 650;
+  color: var(--text);
+}
+.editorActions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-left: auto;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.sectionTitle {
+  font-size: var(--fs-h2);
+  font-weight: 650;
+  color: var(--text);
+}
+.sectionHint {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.fieldLabel {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+.fieldRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}
+.textInput {
+  height: var(--ctrl-h);
+  padding: 0 10px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+.textInput:hover {
+  border-color: var(--border-strong);
+}
+.textInput[aria-invalid="true"] {
+  border-color: var(--danger-border);
+}
+.colorInput {
+  width: 38px;
+  height: var(--ctrl-h);
+  padding: 0;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.select {
+  height: var(--ctrl-h);
+  padding: 0 var(--sp-4);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+.select:hover {
+  border-color: var(--border-strong);
+}
+.numInput {
+  width: 90px;
+}
+.fieldError {
+  font-size: var(--fs-xs);
+  color: var(--danger-fg);
+}
+
+/* ---- FilterEditor ---- */
+.filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.filterToggles {
+  display: flex;
+  gap: var(--sp-6);
+  flex-wrap: wrap;
+}
+.globList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.globRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.globRow .textInput {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+
+/* ---- PairList ---- */
+.pairs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.pairCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.pairHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+.pairHeader .textInput {
+  flex: 1;
+}
+.pairRoots {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-5);
+}
+.pairFooter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+}

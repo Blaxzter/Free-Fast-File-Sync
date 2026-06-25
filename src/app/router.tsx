@@ -12,6 +12,8 @@ import {
 import { AppShell } from "../components/shell/AppShell";
 import { ComingSoon } from "../features/ComingSoon";
 import { JobsList } from "../features/jobs/JobsList";
+import { JobEditor } from "../features/jobs/JobEditor";
+import { JobDetail } from "../features/jobs/JobDetail";
 import { CompareWorkspace } from "../features/jobs/CompareWorkspace";
 import { SettingsGeneral } from "../features/settings/SettingsGeneral";
 import { SettingsImport } from "../features/settings/SettingsImport";
@@ -36,6 +38,29 @@ const compareRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/compare",
   component: CompareWorkspace,
+});
+const jobNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/jobs/new",
+  component: () => <JobEditor />,
+});
+const jobEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/jobs/$jobId/edit",
+  component: function JobEditRoute() {
+    const { jobId } = jobEditRoute.useParams();
+    return <JobEditor jobId={jobId} />;
+  },
+});
+// Job detail: the multi-pair Compare/Run view (S9). Preview/Apply/Cancel a job's
+// folder pairs over the single multi-pair run surface.
+const jobDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/jobs/$jobId",
+  component: function JobDetailRoute() {
+    const { jobId } = jobDetailRoute.useParams();
+    return <JobDetail jobId={jobId} />;
+  },
 });
 
 // ---- Activity domain ----
@@ -112,6 +137,9 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   jobsRoute,
   compareRoute,
+  jobNewRoute,
+  jobEditRoute,
+  jobDetailRoute,
   activityRoute,
   conflictsRoute,
   schedulesRoute,

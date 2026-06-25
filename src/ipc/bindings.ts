@@ -1,7 +1,8 @@
 /* TS bindings mirroring the Rust engine serde output (src-tauri/src/model.rs,
- * config.rs, ffs_import.rs). Hand-maintained for Phase 0; mirrored by Zod
- * schemas in domain/schemas.ts and parsed at the IPC boundary so a serde
- * mismatch fails loudly in dev. Keep field names exactly as serde emits them. */
+ * config.rs, job.rs, runs.rs, lib.rs, ffs_import.rs). Hand-maintained;
+ * mirrored by Zod schemas in domain/schemas.ts and parsed at the IPC boundary
+ * so a serde mismatch fails loudly in dev. Keep field names EXACTLY as serde
+ * emits them (snake_case: root_a, filter_override, compare_mode, …). */
 
 // ---- model.rs enums (serialize to plain enum-variant strings) ----
 
@@ -40,6 +41,9 @@ export type Resolution =
 export type BaselineStatusKind = "Present" | "FirstSync" | "Corrupt";
 
 export type ItemStatus = "Done" | "Skipped" | "Failed" | "Conflict";
+
+/** model.rs SyncMode — the engine-axis one-way post-filter. */
+export type SyncMode = "TwoWay" | "Mirror" | "Update";
 
 // ---- model.rs structs ----
 
@@ -122,6 +126,8 @@ export interface IgnorePolicy {
 export interface JobConfig {
   root_a: string;
   root_b: string;
+  /** Engine-axis post-filter (config.rs JobConfig::mode, default TwoWay). */
+  mode: SyncMode;
   ignore: IgnorePolicy;
   verify_by_hash: boolean;
   big_delete_pct: number;
@@ -129,13 +135,122 @@ export interface JobConfig {
   use_recycle_bin: boolean;
 }
 
-// ---- lib.rs event payload (sync://progress) ----
+// ---- job.rs (the persisted Job aggregate) ----
 
-export interface Progress {
+export type CompareMode = "TimeAndSize" | "Content";
+
+/** Persisted 5-way direction (job.rs SyncDirection). Maps to {SyncMode, swap}
+ * at fan-out (Rust authoritative; frontend mirror lives in domain/job.ts). */
+export type SyncDirection =
+  | "TwoWay"
+  | "MirrorAtoB"
+  | "MirrorBtoA"
+  | "UpdateAtoB"
+  | "UpdateBtoA";
+
+/** job.rs DeletionPolicy — serde(tag = "kind"). Versioning is descoped. */
+export type DeletionPolicy = { kind: "RecycleBin" } | { kind: "Permanent" };
+
+export interface BigDeleteGuard {
+  pct: number;
+  abs: number;
+}
+
+/** job.rs EndpointPath — serde(tag = "kind"). */
+export type EndpointPath =
+  | { kind: "Local"; path: string }
+  | { kind: "Remote"; endpoint_id: string; path: string };
+
+export interface JobSettings {
+  compare_mode: CompareMode;
+  direction: SyncDirection;
+  deletion: DeletionPolicy;
+  big_delete: BigDeleteGuard;
+  filter: IgnorePolicy;
+}
+
+export interface FolderPair {
+  id: string;
+  label: string;
+  root_a: EndpointPath;
+  root_b: EndpointPath;
+  enabled: boolean;
+  filter_override?: IgnorePolicy;
+  mode_override?: SyncDirection;
+  deletion_override?: DeletionPolicy;
+  big_delete_override?: BigDeleteGuard;
+}
+
+export interface Job {
+  id: string;
+  name: string;
+  color?: string;
+  created_at: string;
+  updated_at: string;
+  settings: JobSettings;
+  pairs: FolderPair[];
+}
+
+// ---- lib.rs multi-pair run surface ----
+
+/** One pair's preview inside a run (lib.rs PairPreview). */
+export interface PairPreview {
+  pair_id: string;
+  plan: SyncPlan;
+  baseline_status: BaselineStatusKind;
+}
+
+/** preview_job(job_id, pair_ids?) -> PreviewJobResult. */
+export interface PreviewJobResult {
+  run_id: string;
+  pairs: PairPreview[];
+}
+
+/** One pair's apply report inside a run (lib.rs PairReport). */
+export interface PairReport {
+  pair_id: string;
+  report: ApplyReport;
+}
+
+/** execute_job(run_id, resolutions, confirm_big_delete) -> ExecuteJobResult. */
+export interface ExecuteJobResult {
+  run_id: string;
+  pairs: PairReport[];
+}
+
+// ---- lib.rs run://* event payloads ----
+
+export interface RunStarted {
+  run_id: string;
+  job_id: string;
+  pair_count: number;
+  trigger: string;
+}
+
+export interface RunScan {
+  run_id: string;
+  pair_id: string;
+  phase: string;
+}
+
+export interface RunProgress {
+  run_id: string;
+  pair_id: string;
+  pair_index: number;
+  pair_count: number;
   done: number;
   total: number;
   path: string;
   action: string;
+}
+
+export interface RunPairDone {
+  run_id: string;
+  pair_id: string;
+}
+
+export interface RunFinished {
+  run_id: string;
 }
 
 // ---- ffs_import.rs ----

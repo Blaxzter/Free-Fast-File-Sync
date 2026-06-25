@@ -1,6 +1,7 @@
 /* Zod schemas mirroring the Rust serde DTOs. Parsed at the IPC boundary
- * (ipc/commands.ts) so a backend/serde mismatch fails loudly in dev rather
- * than producing silently-wrong UI. Hand-kept in sync with ipc/bindings.ts. */
+ * (ipc/commands.ts, ipc/events.ts) so a backend/serde mismatch fails loudly in
+ * dev rather than producing silently-wrong UI. Hand-kept in sync with
+ * ipc/bindings.ts. */
 
 import { z } from "zod";
 
@@ -42,6 +43,19 @@ export const zResolution = z.enum([
 export const zBaselineStatusKind = z.enum(["Present", "FirstSync", "Corrupt"]);
 
 export const zItemStatus = z.enum(["Done", "Skipped", "Failed", "Conflict"]);
+
+/** model.rs SyncMode. Default TwoWay (config.rs JobConfig::mode #[serde(default)]). */
+export const zSyncMode = z.enum(["TwoWay", "Mirror", "Update"]).default("TwoWay");
+
+export const zCompareMode = z.enum(["TimeAndSize", "Content"]);
+
+export const zSyncDirection = z.enum([
+  "TwoWay",
+  "MirrorAtoB",
+  "MirrorBtoA",
+  "UpdateAtoB",
+  "UpdateBtoA",
+]);
 
 export const zMeta = z.object({
   kind: zEntryKind,
@@ -111,12 +125,121 @@ export const zApplyReport = z.object({
   outcomes: z.array(zItemOutcome),
 });
 
-export const zProgress = z.object({
+// ---- config.rs ----
+
+export const zIgnorePolicy = z.object({
+  use_gitignore: z.boolean(),
+  use_dot_ignore: z.boolean(),
+  include_hidden: z.boolean(),
+  custom_globs: z.array(z.string()),
+});
+
+// ---- job.rs aggregate ----
+
+export const zDeletionPolicy = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("RecycleBin") }),
+  z.object({ kind: z.literal("Permanent") }),
+]);
+
+export const zEndpointPath = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("Local"), path: z.string() }),
+  z.object({ kind: z.literal("Remote"), endpoint_id: z.string(), path: z.string() }),
+]);
+
+export const zBigDeleteGuard = z.object({
+  pct: z.number(),
+  abs: z.number(),
+});
+
+export const zJobSettings = z.object({
+  compare_mode: zCompareMode,
+  direction: zSyncDirection,
+  deletion: zDeletionPolicy,
+  big_delete: zBigDeleteGuard,
+  filter: zIgnorePolicy,
+});
+
+export const zFolderPair = z.object({
+  id: z.string(),
+  label: z.string(),
+  root_a: zEndpointPath,
+  root_b: zEndpointPath,
+  enabled: z.boolean(),
+  filter_override: zIgnorePolicy.optional(),
+  mode_override: zSyncDirection.optional(),
+  deletion_override: zDeletionPolicy.optional(),
+  big_delete_override: zBigDeleteGuard.optional(),
+});
+
+export const zJob = z.object({
+  id: z.string(),
+  name: z.string(),
+  color: z.string().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  settings: zJobSettings,
+  pairs: z.array(zFolderPair),
+});
+
+// ---- lib.rs multi-pair run surface ----
+
+export const zPairPreview = z.object({
+  pair_id: z.string(),
+  plan: zSyncPlan,
+  baseline_status: zBaselineStatusKind,
+});
+
+export const zPreviewJobResult = z.object({
+  run_id: z.string(),
+  pairs: z.array(zPairPreview),
+});
+
+export const zPairReport = z.object({
+  pair_id: z.string(),
+  report: zApplyReport,
+});
+
+export const zExecuteJobResult = z.object({
+  run_id: z.string(),
+  pairs: z.array(zPairReport),
+});
+
+// ---- lib.rs run://* event payloads ----
+
+export const zRunStarted = z.object({
+  run_id: z.string(),
+  job_id: z.string(),
+  pair_count: z.number(),
+  trigger: z.string(),
+});
+
+export const zRunScan = z.object({
+  run_id: z.string(),
+  pair_id: z.string(),
+  phase: z.string(),
+});
+
+export const zRunProgress = z.object({
+  run_id: z.string(),
+  pair_id: z.string(),
+  pair_index: z.number(),
+  pair_count: z.number(),
   done: z.number(),
   total: z.number(),
   path: z.string(),
   action: z.string(),
 });
+
+export const zRunPairDone = z.object({
+  run_id: z.string(),
+  pair_id: z.string(),
+});
+
+export const zRunFinished = z.object({
+  run_id: z.string(),
+});
+
+// ---- ffs_import.rs ----
 
 export const zImportedJob = z.object({
   name: z.string(),

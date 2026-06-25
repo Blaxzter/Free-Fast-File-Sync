@@ -1,0 +1,126 @@
+/* Multi-pair run views: per-pair compare sections + the live run strip. */
+
+.pairSection {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.pairHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.pairToggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text);
+  text-align: left;
+}
+
+.caret {
+  width: 14px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.pairRoots {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono);
+}
+.rootName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rootArrow {
+  color: var(--text-faint);
+}
+
+.pairLabel {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.pairBadges {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.delBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: 20px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.pairCount {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.pairBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+}
+
+/* ---- Live run strip ---- */
+.runStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+}
+.runStripTrack {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-2);
+  overflow: hidden;
+}
+.runStripFill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.15s linear;
+}
+.runStripMono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 50%;
+}

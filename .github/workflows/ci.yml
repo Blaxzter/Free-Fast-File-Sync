@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly Tier-2 native E2E (Windows-only). 03:17 UTC.
+    - cron: "17 3 * * *"
+
+# Windows-first project: tauri-driver native E2E only runs on Windows/Linux and
+# never on macOS, so the whole matrix is windows-latest. macOS coverage comes
+# from the cross-platform Tier-1 Playwright suite + the Rust test suite.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ── Fast feedback (the pre-commit-equivalent gate) ────────────────────────
+  # cargo test --lib + vitest + tsc --noEmit + cargo fmt --check + clippy.
+  # IMPORTANT: fmt runs with --check ONLY — it must never rewrite reconcile.rs
+  # (or any source). A failing fmt is a hard error the author fixes locally.
+  check:
+    name: check (lib tests · vitest · tsc · fmt · clippy)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Rust unit suites (no IO build): reconcile, sync_mode, run_registry, job…
+      - name: cargo test --lib
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      - name: cargo fmt --check (no rewrite)
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy -D warnings
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: tsc --noEmit (type-check incl. bindings)
+        run: pnpm exec tsc --noEmit
+
+      - name: vitest (frontend unit/component)
+        run: pnpm test
+
+  # ── Per-PR: full Rust test suite + Tier-1 Playwright (mocked IPC) ─────────
+  # Tier-1 needs only `pnpm build:e2e` + a static preview server + headless
+  # Chromium — NO Rust compile of the Tauri app — so it stays a couple minutes.
+  pr:
+    name: per-PR (full cargo test · Tier-1 Playwright)
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Full Rust suite, including the multi-pair integration crate.
+      - name: cargo test (full, incl. tests/multi_pair.rs)
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Cache Vite build
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist
+            node_modules/.vite
+          key: ${{ runner.os }}-vite-${{ hashFiles('src/**', 'e2e/**', 'index.html', 'vite.config.ts') }}
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Tier-1 Playwright (mocked IPC)
+        run: pnpm e2e:mocked
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  # ── Nightly / release: Tier-2 WDIO native (Windows-only, slow, flake-prone) ─
+  # Requires a full `tauri build --debug` + tauri-driver + a PINNED msedgedriver
+  # matched to the runner's Edge (else the session hangs). Does NOT gate PRs.
+  native:
+    name: nightly Tier-2 (WDIO + tauri-driver)
+    runs-on: windows-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-native-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked
+
+      # Pin msedgedriver to the runner's installed Edge — the documented Windows
+      # footgun: a mismatched driver makes the WebView2 session HANG. windows-
+      # latest ships Edge + a matching msedgedriver under the Edge install dir;
+      # resolve it and export MSEDGEDRIVER_PATH for wdio.conf.ts.
+      - name: Resolve pinned msedgedriver
+        id: edgedriver
+        shell: pwsh
+        run: |
+          $edge = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Edge\BLBeacon' -ErrorAction SilentlyContinue).version
+          Write-Host "Installed Edge: $edge"
+          # GitHub's windows runners preinstall a matching msedgedriver; fall back
+          # to the Selenium-managed one under the tool cache.
+          $candidates = @(
+            "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedgedriver.exe",
+            "$env:ChromeWebDriver\msedgedriver.exe",
+            "$env:EdgeWebDriver\msedgedriver.exe"
+          )
+          $found = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $found) {
+            # Last resort: let webdriverio-managed msedgedriver be fetched at runtime.
+            Write-Host "::warning::No preinstalled msedgedriver found; tauri-driver will try its default."
+          } else {
+            "MSEDGEDRIVER_PATH=$found" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Pinned msedgedriver: $found"
+          }
+
+      - name: Build the debug app (tauri build --debug)
+        run: pnpm tauri build --debug
+
+      - name: Tier-2 WDIO native smoke
+        run: pnpm e2e:native

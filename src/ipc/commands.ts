@@ -1,49 +1,93 @@
 /* Typed wrappers for every engine command. THE ONLY PLACE (with events.ts)
  * that calls Tauri `invoke`. Each wrapper parses the response through a Zod
- * schema at the boundary so a serde/shape mismatch fails loudly. */
+ * schema at the boundary so a serde/shape mismatch fails loudly.
+ *
+ * Surface mirrors src-tauri/src/lib.rs#invoke_handler (S6 multi-pair, job-driven).
+ * The retired single-pair preview_sync/execute_sync/cancel_sync wrappers are gone. */
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  ApplyReport,
   BaselineStatusKind,
+  ExecuteJobResult,
   FfsImport,
-  JobConfig,
+  Job,
+  PreviewJobResult,
   Resolution,
-  SyncPlan,
 } from "./bindings";
 import {
-  zApplyReport,
   zBaselineStatusKind,
+  zExecuteJobResult,
   zFfsImport,
-  zSyncPlan,
+  zJob,
+  zPreviewJobResult,
 } from "../domain/schemas";
+import { z } from "zod";
 
-export function validateJob(cfg: JobConfig): Promise<void> {
-  return invoke<void>("validate_job", { cfg });
+// ---- Job store ----
+
+export async function listJobs(): Promise<Job[]> {
+  const raw = await invoke("list_jobs");
+  return z.array(zJob).parse(raw) as Job[];
 }
 
-export async function getBaselineStatus(cfg: JobConfig): Promise<BaselineStatusKind> {
-  const raw = await invoke("get_baseline_status", { cfg });
+export async function getJob(jobId: string): Promise<Job> {
+  const raw = await invoke("get_job", { jobId });
+  return zJob.parse(raw) as Job;
+}
+
+export async function saveJob(job: Job): Promise<Job> {
+  const raw = await invoke("save_job", { job });
+  return zJob.parse(raw) as Job;
+}
+
+export function deleteJob(jobId: string): Promise<void> {
+  return invoke<void>("delete_job", { jobId });
+}
+
+export async function duplicateJob(jobId: string): Promise<Job> {
+  const raw = await invoke("duplicate_job", { jobId });
+  return zJob.parse(raw) as Job;
+}
+
+// ---- Baseline status (per pair) ----
+
+export async function getPairBaselineStatus(
+  jobId: string,
+  pairId: string,
+): Promise<BaselineStatusKind> {
+  const raw = await invoke("get_pair_baseline_status", { jobId, pairId });
   return zBaselineStatusKind.parse(raw);
 }
 
-export async function previewSync(cfg: JobConfig): Promise<SyncPlan> {
-  const raw = await invoke("preview_sync", { cfg });
-  return zSyncPlan.parse(raw) as SyncPlan;
+// ---- Multi-pair run surface ----
+
+/** preview_job(job_id, pair_ids?) -> { run_id, pairs:[{pair_id, plan, baseline_status}] }.
+ * On success the run slot stays HELD until executeJob/cancelRun releases it. */
+export async function previewJob(
+  jobId: string,
+  pairIds?: string[],
+): Promise<PreviewJobResult> {
+  const raw = await invoke("preview_job", { jobId, pairIds: pairIds ?? null });
+  return zPreviewJobResult.parse(raw) as PreviewJobResult;
 }
 
-export async function executeSync(
-  cfg: JobConfig,
-  resolutions: Record<string, Resolution>,
-  confirmBigDelete: boolean,
-): Promise<ApplyReport> {
-  const raw = await invoke("execute_sync", { cfg, resolutions, confirmBigDelete });
-  return zApplyReport.parse(raw) as ApplyReport;
+/** execute_job(run_id, resolutions: {pairId:{path:Resolution}}, confirm_big_delete: {pairId:bool}). */
+export async function executeJob(
+  runId: string,
+  resolutions: Record<string, Record<string, Resolution>>,
+  confirmBigDelete: Record<string, boolean>,
+): Promise<ExecuteJobResult> {
+  const raw = await invoke("execute_job", { runId, resolutions, confirmBigDelete });
+  return zExecuteJobResult.parse(raw) as ExecuteJobResult;
 }
 
-export function cancelSync(): Promise<void> {
-  return invoke<void>("cancel_sync");
+/** Cancel a run by id. Returns true iff a matching active run was found. */
+export async function cancelRun(runId: string): Promise<boolean> {
+  const raw = await invoke("cancel_run", { runId });
+  return z.boolean().parse(raw);
 }
+
+// ---- FFS import ----
 
 export async function importFfs(path: string): Promise<FfsImport> {
   const raw = await invoke("import_ffs", { path });

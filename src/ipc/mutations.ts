@@ -1,52 +1,110 @@
-/* TanStack Query mutations over the write/engine commands. The Compare
- * Workspace drives Preview/Apply through these; the live progress mirror in the
- * Zustand store is updated by phase transitions here + the single subscriber. */
+/* TanStack Query mutations over the write/engine commands. The multi-pair
+ * run surface (preview_job / execute_job / cancel_run) plus the job-store
+ * writes (save / delete / duplicate). Components drive these and never call
+ * invoke directly. */
 
-import { useMutation } from "@tanstack/react-query";
-import { executeSync, previewSync } from "./commands";
-import type { ApplyReport, JobConfig, Resolution, SyncPlan } from "./bindings";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  cancelRun as cancelRunCmd,
+  deleteJob,
+  duplicateJob,
+  executeJob,
+  previewJob,
+  saveJob,
+} from "./commands";
+import type {
+  ExecuteJobResult,
+  Job,
+  PreviewJobResult,
+  Resolution,
+} from "./bindings";
 import { useStore } from "../app/store";
 
-/** Preview (preview_sync). Flips the engine phase to scanning while it runs. */
-export function usePreview() {
-  const setPhase = useStore((s) => s.setPhase);
-  return useMutation<SyncPlan, unknown, JobConfig>({
-    mutationFn: async (cfg) => {
-      setPhase("scanning");
-      try {
-        return await previewSync(cfg);
-      } finally {
-        setPhase("idle");
-      }
+// ---- Run surface ----
+
+export interface PreviewArgs {
+  jobId: string;
+  pairIds?: string[];
+}
+
+/** Preview a job (preview_job). The run://started event makes the run active in
+ * the store; on success the run slot stays HELD until executeJob/cancelRun. We
+ * also seed the active run from the returned run_id in case the event was
+ * dropped (e.g. parse drift), so executeJob has an active run to stream into. */
+export function usePreviewJob() {
+  const beginRun = useStore((s) => s.beginRun);
+  return useMutation<PreviewJobResult, unknown, PreviewArgs>({
+    mutationFn: async ({ jobId, pairIds }) => {
+      const result = await previewJob(jobId, pairIds);
+      // Preview is done by the time this resolves; the run slot stays HELD but is
+      // idle (ready to apply). The run://started event already made it active;
+      // we re-seed to be robust if that event was dropped.
+      beginRun(result.run_id, {
+        jobId,
+        pairCount: result.pairs.length,
+        phase: "idle",
+      });
+      return result;
     },
   });
 }
 
-export interface ApplyArgs {
-  cfg: JobConfig;
-  resolutions: Record<string, Resolution>;
-  confirmBigDelete: boolean;
+export interface ExecuteArgs {
+  runId: string;
+  resolutions: Record<string, Record<string, Resolution>>;
+  confirmBigDelete: Record<string, boolean>;
 }
 
-/** Apply (execute_sync). Streams progress via the store subscriber; flips the
- * engine phase to applying and records the final report. */
-export function useApply() {
-  const setPhase = useStore((s) => s.setPhase);
-  const setReport = useStore((s) => s.setReport);
-  const setProgress = useStore((s) => s.setProgress);
-  return useMutation<ApplyReport, unknown, ApplyArgs>({
-    mutationFn: async ({ cfg, resolutions, confirmBigDelete }) => {
-      setPhase("applying");
-      setReport(null);
-      setProgress(null);
-      try {
-        const report = await executeSync(cfg, resolutions, confirmBigDelete);
-        setReport(report);
-        return report;
-      } finally {
-        setPhase("idle");
-        setProgress(null);
-      }
+/** Execute a previewed run (execute_job). Marks the run active+applying so the
+ * store's run subscriber streams progress into it; records the final per-pair
+ * reports. run://finished returns the mirror to idle. */
+export function useExecuteJob() {
+  const beginRun = useStore((s) => s.beginRun);
+  return useMutation<ExecuteJobResult, unknown, ExecuteArgs>({
+    mutationFn: async ({ runId, resolutions, confirmBigDelete }) => {
+      beginRun(runId, { phase: "applying" });
+      return await executeJob(runId, resolutions, confirmBigDelete);
+    },
+  });
+}
+
+/** Cancel a run by id (cancel_run). Returns true iff a matching run was found. */
+export function cancelRun(runId: string): Promise<boolean> {
+  return cancelRunCmd(runId);
+}
+
+// ---- Job store writes ----
+
+/** Persist a job (save_job). Invalidates the jobs list + the single-job cache. */
+export function useSaveJob() {
+  const qc = useQueryClient();
+  return useMutation<Job, unknown, Job>({
+    mutationFn: (job) => saveJob(job),
+    onSuccess: (saved) => {
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
+      void qc.invalidateQueries({ queryKey: ["job", saved.id] });
+    },
+  });
+}
+
+/** Delete a job (delete_job). */
+export function useDeleteJob() {
+  const qc = useQueryClient();
+  return useMutation<void, unknown, string>({
+    mutationFn: (jobId) => deleteJob(jobId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+/** Duplicate a job (duplicate_job). */
+export function useDuplicateJob() {
+  const qc = useQueryClient();
+  return useMutation<Job, unknown, string>({
+    mutationFn: (jobId) => duplicateJob(jobId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
 }
