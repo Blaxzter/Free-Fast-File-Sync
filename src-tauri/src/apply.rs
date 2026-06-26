@@ -566,6 +566,8 @@ mod tests {
             big_delete_pct: 0.9,
             big_delete_abs: 10_000,
             use_recycle_bin: true, // route the overwritten B edit to the recycle bin
+            scan_threads: 0,
+            mtime_gran_ns: 0,
         };
 
         let a_meta = file_meta(&a.path().join("f.txt"));
@@ -644,6 +646,8 @@ mod tests {
             big_delete_pct: 0.9,
             big_delete_abs: 10_000,
             use_recycle_bin: true,
+            scan_threads: 0,
+            mtime_gran_ns: 0,
         };
         let item = PlanItem {
             path: "f.txt".to_string(),

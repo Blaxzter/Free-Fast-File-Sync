@@ -466,6 +466,8 @@ mod tests {
             big_delete_pct: 0.25,
             big_delete_abs: 100,
             use_recycle_bin: true,
+            scan_threads: 0,
+            mtime_gran_ns: 0,
         }
     }
 

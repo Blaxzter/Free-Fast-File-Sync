@@ -58,6 +58,18 @@ pub struct JobConfig {
     /// Route deletions through the OS recycle bin (recoverable) when possible.
     #[serde(default = "yes")]
     pub use_recycle_bin: bool,
+    /// Walker threads per root for the directory scan. `0` => auto (the scan picks
+    /// a conservative default sized to the CPU; see `scan::resolve_scan_threads`).
+    /// A non-zero value is an explicit override (clamped to a sane maximum). The
+    /// dominant speed lever over a high-latency network share, but oversubscribing
+    /// SMB can starve the connection — hence configurable, defaulting conservative.
+    #[serde(default)]
+    pub scan_threads: usize,
+    /// mtime comparison tolerance in nanoseconds. `0` => the engine default
+    /// (`engine::DEFAULT_GRAN_NS`, 10ms). Exposed so users on coarse-granularity
+    /// filesystems (FAT/exFAT/some NAS) can widen it to avoid spurious recopies.
+    #[serde(default)]
+    pub mtime_gran_ns: i64,
 }
 
 fn yes() -> bool {

@@ -20,6 +20,29 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 /// rounding (FAT/exFAT 2s) merely causes a harmless one-time recopy, never loss.
 pub const DEFAULT_GRAN_NS: i64 = 10_000_000;
 
+/// Resolve the effective mtime granularity: an explicit per-job value when set
+/// (`> 0`), otherwise the engine default. Kept here so preview and execute agree.
+fn gran_ns(cfg: &JobConfig) -> i64 {
+    if cfg.mtime_gran_ns > 0 {
+        cfg.mtime_gran_ns
+    } else {
+        DEFAULT_GRAN_NS
+    }
+}
+
+/// Per-side scan counts surfaced to the run-log layer (NOT part of the plan). The
+/// `scan_error` flag mirrors the suppress-deletes decision.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanStats {
+    pub entries_a: usize,
+    pub entries_b: usize,
+    pub errors_a: usize,
+    pub errors_b: usize,
+    pub skipped_a: usize,
+    pub skipped_b: usize,
+    pub scan_error: bool,
+}
+
 fn load_baseline(path: &Path) -> (Baseline, BaselineStatusKind) {
     match Baseline::load(path) {
         LoadOutcome::Loaded(b) => (b, BaselineStatusKind::Present),
@@ -68,18 +91,29 @@ type ScanBoth = (
     bool,
 );
 
-/// Scans both roots in parallel. The returned bool is `true` when EITHER scan
+/// Scans both roots in parallel, threading a `scanned` counter into both walks so
+/// a caller can poll live progress. The returned bool is `true` when EITHER scan
 /// hit read errors — in that case deletions must be suppressed this run.
-fn scan_both(cfg: &JobConfig) -> Result<ScanBoth> {
-    scan_both_counted(cfg, &AtomicU64::new(0))
-}
-
-/// Like [`scan_both`], but threads a `scanned` counter into both root walks so a
-/// caller can poll live progress across the whole preview.
 fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
     let (ra, rb) = rayon::join(
-        || scan_root_counted(&cfg.root_a, &cfg.ignore, cfg.verify_by_hash, scanned),
-        || scan_root_counted(&cfg.root_b, &cfg.ignore, cfg.verify_by_hash, scanned),
+        || {
+            scan_root_counted(
+                &cfg.root_a,
+                &cfg.ignore,
+                cfg.verify_by_hash,
+                scanned,
+                cfg.scan_threads,
+            )
+        },
+        || {
+            scan_root_counted(
+                &cfg.root_b,
+                &cfg.ignore,
+                cfg.verify_by_hash,
+                scanned,
+                cfg.scan_threads,
+            )
+        },
     );
     let ra = ra?;
     let rb = rb?;
@@ -128,19 +162,41 @@ pub fn preview_counted(
     baseline_path: &Path,
     scanned: &AtomicU64,
 ) -> Result<SyncPlan> {
+    preview_counted_stats(cfg, baseline_path, scanned).map(|(plan, _)| plan)
+}
+
+/// Like [`preview_counted`], but also returns per-side [`ScanStats`] for the
+/// run-log. Identical plan-building path; the stats are derived from the two scans
+/// (entries / errors / skips per side) for diagnostics only — they never affect
+/// reconciliation.
+pub fn preview_counted_stats(
+    cfg: &JobConfig,
+    baseline_path: &Path,
+    scanned: &AtomicU64,
+) -> Result<(SyncPlan, ScanStats)> {
     validate_job(cfg)?;
     let (base, status) = load_baseline(baseline_path);
     let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
-    Ok(build_plan(PlanInputs {
+    let stats = ScanStats {
+        entries_a: ra.entries.len(),
+        entries_b: rb.entries.len(),
+        errors_a: ra.errors.len(),
+        errors_b: rb.errors.len(),
+        skipped_a: ra.skipped.len(),
+        skipped_b: rb.skipped.len(),
+        scan_error,
+    };
+    let plan = build_plan(PlanInputs {
         cfg,
         a: &ra.entries,
         b: &rb.entries,
         base: &base,
         status,
-        gran_ns: DEFAULT_GRAN_NS,
+        gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
-    }))
+    });
+    Ok((plan, stats))
 }
 
 pub fn execute(
@@ -151,17 +207,52 @@ pub fn execute(
     cancel: &AtomicBool,
     progress: impl FnMut(Progress),
 ) -> Result<ApplyReport> {
+    execute_counted_stats(
+        cfg,
+        baseline_path,
+        resolutions,
+        confirm_big_delete,
+        cancel,
+        &AtomicU64::new(0),
+        progress,
+    )
+    .map(|(report, _)| report)
+}
+
+/// Like [`execute`], but threads a `scanned` counter through the re-scan and also
+/// returns per-side [`ScanStats`] for the run-log. The `scanned` counter is bumped
+/// once per recorded entry during the apply-time re-scan, so the run layer can log
+/// how much was walked (and, in future, surface live apply-scan progress).
+#[allow(clippy::too_many_arguments)]
+pub fn execute_counted_stats(
+    cfg: &JobConfig,
+    baseline_path: &Path,
+    resolutions: &HashMap<String, Resolution>,
+    confirm_big_delete: bool,
+    cancel: &AtomicBool,
+    scanned: &AtomicU64,
+    progress: impl FnMut(Progress),
+) -> Result<(ApplyReport, ScanStats)> {
     validate_job(cfg)?;
     let bpath = baseline_path.to_path_buf();
     let (mut base, status) = load_baseline(&bpath);
-    let (ra, rb, warnings, scan_error) = scan_both(cfg)?;
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
+    let stats = ScanStats {
+        entries_a: ra.entries.len(),
+        entries_b: rb.entries.len(),
+        errors_a: ra.errors.len(),
+        errors_b: rb.errors.len(),
+        skipped_a: ra.skipped.len(),
+        skipped_b: rb.skipped.len(),
+        scan_error,
+    };
     let plan = build_plan(PlanInputs {
         cfg,
         a: &ra.entries,
         b: &rb.entries,
         base: &base,
         status,
-        gran_ns: DEFAULT_GRAN_NS,
+        gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
     });
@@ -183,12 +274,12 @@ pub fn execute(
         &plan,
         resolutions,
         &mut base,
-        DEFAULT_GRAN_NS,
+        gran_ns(cfg),
         cancel,
         progress,
     );
     base.save_atomic(&bpath)?;
-    Ok(report)
+    Ok((report, stats))
 }
 
 #[cfg(test)]
@@ -210,6 +301,8 @@ mod tests {
             big_delete_pct: 0.9,
             big_delete_abs: 10_000,
             use_recycle_bin: false, // hard-delete in tests (no shell)
+            scan_threads: 0,
+            mtime_gran_ns: 0,
         }
     }
 

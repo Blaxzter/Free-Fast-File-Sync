@@ -89,6 +89,15 @@ pub struct JobSettings {
     pub big_delete: BigDeleteGuard,
     #[serde(default)]
     pub filter: IgnorePolicy,
+    /// Per-job override of the scan walker thread count. `None` => inherit the
+    /// global Settings default (which itself may be auto). Surfaced so a job that
+    /// targets a flaky NAS can pin a low value without changing the global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_threads: Option<usize>,
+    /// Per-job override of the mtime comparison tolerance, in MILLISECONDS. `None`
+    /// => inherit the global default. Useful on coarse-granularity targets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_gran_ms: Option<u64>,
 }
 
 /// Local-today, remote-ready endpoint (P3). `serde(tag = "kind")`.
@@ -204,6 +213,13 @@ impl Job {
             big_delete_pct: guard.pct,
             big_delete_abs: guard.abs,
             use_recycle_bin: !matches!(deletion, DeletionPolicy::Permanent),
+            // `0` here means "no per-job override"; the run layer substitutes the
+            // global Settings default (which may itself be auto) before scanning.
+            scan_threads: s.scan_threads.unwrap_or(0),
+            mtime_gran_ns: s
+                .mtime_gran_ms
+                .map(|ms| (ms as i64).saturating_mul(1_000_000))
+                .unwrap_or(0),
         };
         Some(ResolvedPair {
             pair_id: p.id.clone(),

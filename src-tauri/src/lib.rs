@@ -17,36 +17,80 @@ pub mod error;
 mod ffs_import;
 mod fsops;
 pub mod job;
+mod logging;
 pub mod model;
 mod pathutil;
 mod plan;
 mod reconcile;
+pub mod runlog;
 pub mod runs;
-mod scan;
+pub mod scan;
+pub mod settings;
 pub mod store;
+mod timeutil;
 
 use error::SyncError;
 use job::Job;
 use model::{ApplyReport, BaselineStatusKind, Resolution, SyncPlan};
+use runlog::{PairRunLog, RunLogBuilder};
 use runs::{RunDescriptor, RunError, RunRegistry};
 use serde::Serialize;
+use settings::Settings;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
+use tracing_appender::non_blocking::WorkerGuard;
 
 struct AppState {
-    /// Where per-job baselines and job.json files live (OS app-data dir; never
-    /// inside a synced root).
-    #[allow(dead_code)]
+    /// App-data dir ROOT. `logs/`, `runs/run-log.jsonl` and `settings.json` live
+    /// here; `jobs/` (= `state_dir`) is a child. Never inside a synced root.
+    app_dir: PathBuf,
+    /// Where per-job baselines and job.json files live (`app_dir/jobs`).
     state_dir: PathBuf,
     /// Persistence for the Job aggregate (one file per job under `state_dir`).
     store: store::Store,
     /// At-most-one-run gate with per-run cancel tokens. Replaces the old
     /// process-global `cancel: Arc<AtomicBool>`.
     runs: Arc<RunRegistry>,
+    /// Global, user-facing settings (mutable at runtime via `save_settings`).
+    settings: Mutex<Settings>,
+    /// Keeps the non-blocking log appender's background writer thread alive for the
+    /// whole process; dropping it would lose buffered log lines. `None` if a
+    /// subscriber was already installed.
+    _log_guard: Option<WorkerGuard>,
+}
+
+/// Stops the scan-progress ticker on drop — including while another panic unwinds
+/// — so a panicking run can never leave a ticker thread emitting forever (it exits
+/// at its next interval once `stop` is set). Belt-and-suspenders alongside the
+/// explicit stop+join on the normal path.
+struct TickerGuard {
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for TickerGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Fold the global Settings defaults into each resolved pair's `JobConfig` where the
+/// pair left a knob on "auto" (`0`). A pair-level value (already in `config`) wins;
+/// the global default fills the gap; a still-`0` value means "let the engine pick".
+fn apply_global_defaults(resolved: &mut [job::ResolvedPair], settings: &Settings) {
+    let default_threads = settings.scan_threads;
+    let default_gran = settings.mtime_gran_ns();
+    for r in resolved.iter_mut() {
+        if r.config.scan_threads == 0 {
+            r.config.scan_threads = default_threads;
+        }
+        if r.config.mtime_gran_ns == 0 {
+            r.config.mtime_gran_ns = default_gran;
+        }
+    }
 }
 
 fn busy(e: RunError) -> SyncError {
@@ -183,6 +227,33 @@ struct RunScanProgress {
     scanned: u64,
 }
 
+/// Build one pair's run-log record from its scan stats + timing. `err` is `Some`
+/// when the pair failed (its scan stats are then meaningless and passed as
+/// default). `scanned - before` is the live counter delta attributed to this pair.
+fn pair_run_log(
+    r: &job::ResolvedPair,
+    stats: &engine::ScanStats,
+    scanned: &AtomicU64,
+    before: u64,
+    t0: Instant,
+    err: Option<&SyncError>,
+) -> PairRunLog {
+    PairRunLog {
+        pair_id: r.pair_id.clone(),
+        entries_a: stats.entries_a,
+        entries_b: stats.entries_b,
+        errors_a: stats.errors_a,
+        errors_b: stats.errors_b,
+        skipped_a: stats.skipped_a,
+        skipped_b: stats.skipped_b,
+        scanned: scanned.load(Ordering::Relaxed).saturating_sub(before),
+        threads: scan::resolve_scan_threads(r.config.scan_threads),
+        ms: t0.elapsed().as_millis(),
+        ok: err.is_none(),
+        error: err.map(|e| e.to_string()),
+    }
+}
+
 /// Resolve the enabled pairs for `job`, optionally filtered to `pair_ids`, in job
 /// order. A `Some(pair_ids)` filter keeps only those ids (and only if enabled).
 fn select_pairs(job: &Job, pair_ids: &Option<Vec<String>>) -> Vec<job::ResolvedPair> {
@@ -208,7 +279,14 @@ async fn preview_job(
     state: State<'_, AppState>,
 ) -> Result<PreviewJobResult, SyncError> {
     let job = state.store.load(&job_id)?;
-    let resolved = select_pairs(&job, &pair_ids);
+    let mut resolved = select_pairs(&job, &pair_ids);
+    // Fold global Settings defaults (scan threads, mtime granularity) into any pair
+    // left on "auto", and snapshot the live-progress ticker interval.
+    let ticker_ms = {
+        let s = state.settings.lock().unwrap();
+        apply_global_defaults(&mut resolved, &s);
+        s.ticker_ms()
+    };
     let selected_ids: Vec<String> = resolved.iter().map(|r| r.pair_id.clone()).collect();
 
     let runs = state.runs.clone();
@@ -220,6 +298,7 @@ async fn preview_job(
         .map_err(busy)?;
     let run_id = handle.run_id.clone();
     let store_dir = state.state_dir.clone();
+    let app_dir = state.app_dir.clone();
     let job_id_for_paths = job_id.clone();
 
     let _ = app.emit(
@@ -250,7 +329,7 @@ async fn preview_job(
             let stop = stop.clone();
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(120));
+                    std::thread::sleep(Duration::from_millis(ticker_ms));
                     let _ = app.emit(
                         "run://scan-progress",
                         RunScanProgress {
@@ -261,37 +340,64 @@ async fn preview_job(
                 }
             })
         };
+        // Belt-and-suspenders: if anything below panics, the ticker is still told
+        // to stop on unwind so it can never run away.
+        let _ticker_guard = TickerGuard { stop: stop.clone() };
 
-        // Wrapped so an early `?` still stops the ticker + emits the final count.
-        let pairs = (|| -> std::result::Result<Vec<PairPreview>, SyncError> {
-            let mut pairs = Vec::with_capacity(resolved.len());
-            for r in &resolved {
-                let _ = app_for_task.emit(
-                    "run://scan",
-                    RunScan {
-                        run_id: run_id_task.clone(),
-                        pair_id: r.pair_id.clone(),
-                        phase: "Scanning".into(),
-                    },
-                );
-                let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
-                let status = engine::baseline_status(&bpath);
-                let plan = engine::preview_counted(&r.config, &bpath, &scanned)?;
-                pairs.push(PairPreview {
+        // Structured run record: one JSON line + tracing events when the run ends.
+        let mut rl = RunLogBuilder::new(
+            &run_id_task,
+            &job_id_for_paths,
+            "preview",
+            "Manual",
+            resolved.len(),
+        );
+        let mut pairs = Vec::with_capacity(resolved.len());
+        let mut run_err: Option<SyncError> = None;
+
+        for r in &resolved {
+            let _ = app_for_task.emit(
+                "run://scan",
+                RunScan {
+                    run_id: run_id_task.clone(),
                     pair_id: r.pair_id.clone(),
-                    plan,
-                    baseline_status: status,
-                });
-                let _ = app_for_task.emit(
-                    "run://pair-done",
-                    RunPairDone {
-                        run_id: run_id_task.clone(),
+                    phase: "Scanning".into(),
+                },
+            );
+            let before = scanned.load(Ordering::Relaxed);
+            let t0 = Instant::now();
+            let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
+            let status = engine::baseline_status(&bpath);
+            match engine::preview_counted_stats(&r.config, &bpath, &scanned) {
+                Ok((plan, stats)) => {
+                    rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
+                    pairs.push(PairPreview {
                         pair_id: r.pair_id.clone(),
-                    },
-                );
+                        plan,
+                        baseline_status: status,
+                    });
+                    let _ = app_for_task.emit(
+                        "run://pair-done",
+                        RunPairDone {
+                            run_id: run_id_task.clone(),
+                            pair_id: r.pair_id.clone(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    rl.pair(pair_run_log(
+                        r,
+                        &engine::ScanStats::default(),
+                        &scanned,
+                        before,
+                        t0,
+                        Some(&e),
+                    ));
+                    run_err = Some(e);
+                    break; // a dead pair aborts the run; the slot is released below
+                }
             }
-            Ok(pairs)
-        })();
+        }
 
         stop.store(true, Ordering::Relaxed);
         let _ = ticker.join();
@@ -303,7 +409,13 @@ async fn preview_job(
                 scanned: scanned.load(Ordering::Relaxed),
             },
         );
-        pairs
+        // Preview has no per-loop cancel observation, so it is never "cancelled".
+        rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), false);
+
+        match run_err {
+            Some(e) => Err(e),
+            None => Ok(pairs),
+        }
     })
     .await
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));
@@ -343,8 +455,15 @@ async fn execute_job(
 
     let job = state.store.load(&ctx.job_id)?;
     let pair_ids = Some(ctx.pair_ids.clone());
-    let resolved = select_pairs(&job, &pair_ids);
+    let mut resolved = select_pairs(&job, &pair_ids);
+    // Same global-default injection as preview, so the apply re-scan uses the same
+    // walker thread count and granularity the user previewed with.
+    {
+        let s = state.settings.lock().unwrap();
+        apply_global_defaults(&mut resolved, &s);
+    }
     let store_dir = state.state_dir.clone();
+    let app_dir = state.app_dir.clone();
     let job_id_for_paths = ctx.job_id.clone();
     let cancel = ctx.cancel.clone();
 
@@ -354,9 +473,20 @@ async fn execute_job(
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let store = store::Store::new(store_dir);
+        // Counter for the apply-time re-scan, read per pair for the run-log.
+        let scanned = Arc::new(AtomicU64::new(0));
+        let mut rl = RunLogBuilder::new(
+            &run_id_task,
+            &job_id_for_paths,
+            "execute",
+            "Manual",
+            resolved.len(),
+        );
         let mut reports = Vec::with_capacity(resolved.len());
+        let mut run_err: Option<SyncError> = None;
+
         for (pair_index, r) in resolved.iter().enumerate() {
-            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            if cancel.load(Ordering::Relaxed) {
                 break;
             }
             let _ = app_for_task.emit(
@@ -367,6 +497,8 @@ async fn execute_job(
                     phase: "Scanning".into(),
                 },
             );
+            let before = scanned.load(Ordering::Relaxed);
+            let t0 = Instant::now();
             let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
             let res_for_pair = resolutions.get(&r.pair_id).cloned().unwrap_or_default();
             let confirm = confirm_big_delete.get(&r.pair_id).copied().unwrap_or(false);
@@ -374,12 +506,13 @@ async fn execute_job(
             let pair_id = r.pair_id.clone();
             let run_id_p = run_id_task.clone();
             let app_p = app_for_task.clone();
-            let report = engine::execute(
+            match engine::execute_counted_stats(
                 &r.config,
                 &bpath,
                 &res_for_pair,
                 confirm,
                 &cancel,
+                &scanned,
                 move |p| {
                     let _ = app_p.emit(
                         "run://progress",
@@ -395,20 +528,45 @@ async fn execute_job(
                         },
                     );
                 },
-            )?;
-            reports.push(PairReport {
-                pair_id: r.pair_id.clone(),
-                report,
-            });
-            let _ = app_for_task.emit(
-                "run://pair-done",
-                RunPairDone {
-                    run_id: run_id_task.clone(),
-                    pair_id: r.pair_id.clone(),
-                },
-            );
+            ) {
+                Ok((report, stats)) => {
+                    rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
+                    reports.push(PairReport {
+                        pair_id: r.pair_id.clone(),
+                        report,
+                    });
+                    let _ = app_for_task.emit(
+                        "run://pair-done",
+                        RunPairDone {
+                            run_id: run_id_task.clone(),
+                            pair_id: r.pair_id.clone(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    rl.pair(pair_run_log(
+                        r,
+                        &engine::ScanStats::default(),
+                        &scanned,
+                        before,
+                        t0,
+                        Some(&e),
+                    ));
+                    run_err = Some(e);
+                    break;
+                }
+            }
         }
-        Ok::<_, SyncError>(reports)
+
+        // The cancel token stays flipped once set, so reading it now catches a
+        // cancel observed anywhere in the run (between pairs OR mid-apply of the
+        // last pair) — so a user-cancelled run isn't logged as a clean success.
+        let cancelled = cancel.load(Ordering::Relaxed);
+        rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), cancelled);
+        match run_err {
+            Some(e) => Err(e),
+            None => Ok(reports),
+        }
     })
     .await
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));
@@ -437,6 +595,33 @@ fn cancel_run(run_id: String, state: State<'_, AppState>) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Global settings
+// ---------------------------------------------------------------------------
+
+/// Current global settings (defaults if none were ever saved).
+#[tauri::command]
+fn get_settings(state: State<'_, AppState>) -> Settings {
+    state.settings.lock().unwrap().clone()
+}
+
+/// Persist global settings and apply them in-process. Returns the saved value.
+/// Note: the log level is read at startup, so a changed level takes effect on the
+/// next launch; the scan-thread/granularity/ticker values apply to the next run.
+#[tauri::command]
+fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<Settings, SyncError> {
+    let saved = settings::save(&state.app_dir, &settings)?;
+    *state.settings.lock().unwrap() = saved.clone();
+    tracing::info!(
+        scan_threads = saved.scan_threads,
+        mtime_gran_ms = saved.mtime_gran_ms,
+        scan_ticker_ms = saved.scan_ticker_ms,
+        log_level = %saved.log_level,
+        "settings saved"
+    );
+    Ok(saved)
+}
+
+// ---------------------------------------------------------------------------
 // FFS import (unchanged)
 // ---------------------------------------------------------------------------
 
@@ -453,16 +638,30 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let state_dir = app
+            // App-data dir ROOT: settings.json, logs/ and runs/ live here; jobs/ is
+            // a child. Fall back to a NAMED temp subdir (not the temp root) so a
+            // missing app-data dir doesn't scatter logs across the temp directory.
+            let app_dir = app
                 .path()
                 .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir())
-                .join("jobs");
+                .unwrap_or_else(|_| std::env::temp_dir().join("fast-file-sync"));
+            let _ = std::fs::create_dir_all(&app_dir);
+
+            // Load settings BEFORE logging so the configured log level applies.
+            let settings = settings::load(&app_dir);
+            let log_guard = logging::init(&app_dir.join("logs"), &settings.log_level);
+
+            let state_dir = app_dir.join("jobs");
             let _ = std::fs::create_dir_all(&state_dir);
+
+            tracing::info!(app_dir = %app_dir.display(), "fast-file-sync starting");
             app.manage(AppState {
                 store: store::Store::new(state_dir.clone()),
+                app_dir,
                 state_dir,
                 runs: Arc::new(RunRegistry::new()),
+                settings: Mutex::new(settings),
+                _log_guard: log_guard,
             });
             Ok(())
         })
@@ -476,6 +675,8 @@ pub fn run() {
             preview_job,
             execute_job,
             cancel_run,
+            get_settings,
+            save_settings,
             import_ffs
         ])
         .run(tauri::generate_context!())

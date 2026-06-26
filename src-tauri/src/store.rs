@@ -102,7 +102,7 @@ impl Store {
     /// and returns it (so the frontend never invents ids).
     pub fn save(&self, job: &Job) -> Result<Job> {
         let mut job = job.clone();
-        let now = now_rfc3339();
+        let now = crate::timeutil::now_rfc3339();
 
         if job.id.trim().is_empty() {
             job.id = ulid::Ulid::new().to_string();
@@ -148,33 +148,6 @@ impl Store {
 fn checksum(job: &Job) -> String {
     let json = serde_json::to_vec(job).unwrap_or_default();
     blake3::hash(&json).to_hex().to_string()
-}
-
-fn now_rfc3339() -> String {
-    // RFC3339 UTC without an external chrono dependency.
-    let dur = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = dur.as_secs() as i64;
-    let days = secs.div_euclid(86_400);
-    let tod = secs.rem_euclid(86_400);
-    let (h, m, s) = (tod / 3600, (tod % 3600) / 60, tod % 60);
-    let (y, mo, d) = civil_from_days(days);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-/// Howard Hinnant's days-from-civil, inverted: civil date from days since epoch.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// Atomic write: temp file in the same dir, fsync, then rename over the target.
