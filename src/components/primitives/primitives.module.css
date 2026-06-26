@@ -173,30 +173,43 @@
   min-width: 0;
 }
 
-/* ---- Toggle ---- */
+/* ---- Toggle (Radix Switch, styled via [data-state] — no Tailwind) ---- */
 .toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-4);
   font-size: var(--fs-sm);
-  cursor: pointer;
   user-select: none;
 }
 .toggleTrack {
   position: relative;
   width: 30px;
   height: 16px;
+  padding: 0;
   border-radius: var(--radius-pill);
   background: var(--bg-surface-3);
   border: 1px solid var(--border);
   transition: background var(--dur-fast) var(--ease);
   flex: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
 }
-.toggleOn {
+.toggleTrack[data-state="checked"] {
   background: var(--accent);
   border-color: var(--accent);
 }
+.toggleTrack:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
+}
+.toggleTrack[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .toggleKnob {
+  display: block;
   position: absolute;
   top: 1px;
   left: 1px;
@@ -206,14 +219,11 @@
   background: var(--text);
   transition: transform var(--dur-fast) var(--ease);
 }
-.toggleOn .toggleKnob {
+.toggleTrack[data-state="checked"] .toggleKnob {
   transform: translateX(14px);
 }
-.toggle input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
+.toggleLabel {
+  cursor: pointer;
 }
 
 /* ---- Select ---- */

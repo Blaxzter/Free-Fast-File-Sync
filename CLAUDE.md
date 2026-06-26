@@ -13,6 +13,31 @@ Reliable, fast two-way file sync that natively respects `.gitignore`. Rust core
   `cargo fmt --check` and `pnpm format:check`; both run `--check` only and never rewrite.
 - Biome ignores `src-tauri/**` and CSS (CSS is hand-maintained).
 
+## Components (Radix UI on our tokens)
+
+Interactive components are built on **Radix UI primitives** (behavior + accessibility) and
+styled with our **CSS Modules + `src/styles/tokens.css`** — never Tailwind, and never a
+from-scratch popover/menu/dialog/tooltip. The reference implementation is `Toggle.tsx`
+(Radix `Switch`) + its styles in `primitives.module.css`.
+
+- Compose Radix behavior onto our styled elements with **`asChild`**, and style off Radix's
+  **`[data-state="checked|open|active"]` / `[data-disabled]`** attributes (not hand-managed
+  class toggles).
+- Meaning colors still come ONLY from `domain/meaning.ts`. Radix content that **portals**
+  (Select / DropdownMenu / Tooltip / Toast) resolves `var(--*)` fine since the tokens live
+  on `:root`.
+- Adoption order as features land: **Switch (done)** → Dialog/AlertDialog (the overlay
+  foundation: big-delete typed confirm, FFS import review, conflict panel) → DropdownMenu
+  (kebab / bulk-action menus) → Select (ResolutionSelect + the JobEditor selects, with the
+  conflict panel) → RadioGroup → Tabs → Tooltip (replaces native `title=""`) → Toast →
+  `cmdk` (the Cmd-K palette). Add the matching `@radix-ui/react-*` package per step.
+
+**Do NOT Radix-ify / do NOT touch:** the presentational meaning badges (`ActionBadge`,
+`ChangeGlyph`, `ModeBadge`, …), the virtualized `PlanGrid`, the router `Sidebar`, the OS
+`FolderPicker`. **Banners stay Banners:** safety surfaces (`Banner`, `BigDeleteGate`) are
+deliberately non-dismissible — Toast is for completion/info only, NEVER for conflicts or
+big-delete.
+
 ## Tests
 
 - **Rust:** `cd src-tauri && cargo test` (unit suites + `tests/multi_pair.rs`)

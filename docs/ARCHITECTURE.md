@@ -65,6 +65,8 @@ src/
 
 **Layering rule (enforced by lint boundaries):** `features/*` and `components/*` may import from `ipc/queries|mutations` and `domain/*`, but must NEVER call `invoke`/`listen` directly. Only `ipc/commands.ts` and `ipc/events.ts` touch Tauri. This is what makes cloud/watch/schedule additions a matter of adding hooks, not rewiring components — and makes the whole UI testable by mocking the `ipc` layer.
 
+**Component-primitives rule:** interactive primitives (Modal/Dialog, Select, DropdownMenu, Tooltip, Toast, Switch, Tabs, the ⌘K palette) are built on **Radix UI** for behavior + accessibility and styled with our CSS Modules + `tokens.css` (`asChild` + `[data-state]`) — never Tailwind, never hand-rolled. Meaning colors stay in `domain/meaning.ts`; safety surfaces (`Banner`, `BigDeleteGate`) are non-dismissible and never become Toasts. The presentational meaning badges, the virtualized `PlanGrid`, the router `Sidebar`, and the OS `FolderPicker` stay as-is. Adoption order + the do-not-touch list live in `CLAUDE.md`; reference impl: `Toggle` (Radix `Switch`).
+
 ---
 
 ### 3. TS data model (Job-with-many-Pairs)
