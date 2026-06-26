@@ -37,14 +37,23 @@ impl ScanResult {
     }
 }
 
-/// Walk one root into a key→Meta map. Hashes are only computed when `hash_files`
-/// (verify-by-hash mode); otherwise change detection is metadata-based.
-pub fn scan_root(root: &Path, policy: &IgnorePolicy, hash_files: bool) -> Result<ScanResult> {
-    scan_root_counted(root, policy, hash_files, &AtomicU64::new(0))
+/// Walker thread count. The `ignore` crate defaults to the CPU count, but a
+/// directory scan — especially over a high-latency network share (SMB/NAS) — is
+/// bound by per-entry round-trip latency, NOT CPU. Oversubscribing keeps many
+/// requests in flight and is the dominant speed lever there (measured ~3-4x on a
+/// real NAS). Capped so we never spawn an absurd number; harmless for local SSD
+/// scans, which are already orders of magnitude faster. A future per-job setting
+/// can override this.
+fn scan_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() * 4).clamp(8, 64))
+        .unwrap_or(16)
 }
 
-/// Like [`scan_root`], but bumps `scanned` once per recorded entry so a caller on
-/// another thread can poll live scan progress (e.g. to emit a progress event).
+/// Walk one root into a key→Meta map. Hashes are only computed when `hash_files`
+/// (verify-by-hash mode); otherwise change detection is metadata-based. `scanned`
+/// is bumped once per recorded entry so a caller on another thread can poll live
+/// scan progress (e.g. to emit a progress event).
 pub fn scan_root_counted(
     root: &Path,
     policy: &IgnorePolicy,
@@ -70,7 +79,8 @@ pub fn scan_root_counted(
         .git_global(false) // machine-specific ~/.gitignore would break symmetry
         .parents(false) // do not read ignore files above the root
         .require_git(false) // honor .gitignore even when the folder isn't a git repo
-        .follow_links(false);
+        .follow_links(false)
+        .threads(scan_threads());
 
     // Apply the user's custom exclude/include globs with proper gitignore
     // semantics (a leading `!` re-includes). Pruning a directory stops descent.
@@ -262,7 +272,8 @@ mod tests {
         fs::create_dir(root.join("build")).unwrap();
         fs::write(root.join("build").join("out.bin"), "x").unwrap();
 
-        let res = scan_root(root, &IgnorePolicy::default(), false).unwrap();
+        let res =
+            scan_root_counted(root, &IgnorePolicy::default(), false, &AtomicU64::new(0)).unwrap();
         assert!(res.entries.contains_key("keep.txt"));
         assert!(!res.entries.contains_key("ignored.txt"));
         assert!(!res.entries.keys().any(|k| k.starts_with("build")));
@@ -279,9 +290,11 @@ mod tests {
         fs::write(root.join("b.log"), "2").unwrap();
         fs::write(root.join("c.txt"), "3").unwrap();
 
-        let mut policy = IgnorePolicy::default();
-        policy.custom_globs = vec!["*.log".into(), "!b.log".into()];
-        let res = scan_root(root, &policy, false).unwrap();
+        let policy = IgnorePolicy {
+            custom_globs: vec!["*.log".into(), "!b.log".into()],
+            ..Default::default()
+        };
+        let res = scan_root_counted(root, &policy, false, &AtomicU64::new(0)).unwrap();
         assert!(!res.entries.contains_key("a.log"));
         assert!(res.entries.contains_key("b.log")); // re-included by negation
         assert!(res.entries.contains_key("c.txt"));

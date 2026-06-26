@@ -17,47 +17,35 @@ use crate::model::SyncMode;
 use serde::{Deserialize, Serialize};
 
 /// Compare strategy. `Content` maps onto today's `verify_by_hash`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CompareMode {
+    #[default]
     TimeAndSize,
     Content,
-}
-impl Default for CompareMode {
-    fn default() -> Self {
-        CompareMode::TimeAndSize
-    }
 }
 
 /// Persisted 5-way direction. POST-FILTER on the reconcile Decision (a sibling
 /// area owns the actual filter + the 5-way -> {SyncMode, swap_roots} mapping);
 /// persisted here so a pair can override the job default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum SyncDirection {
+    #[default]
     TwoWay,
     MirrorAtoB,
     MirrorBtoA,
     UpdateAtoB,
     UpdateBtoA,
 }
-impl Default for SyncDirection {
-    fn default() -> Self {
-        SyncDirection::TwoWay
-    }
-}
 
 /// Where deleted/overwritten files go. `serde(tag = "kind")` => the TS
 /// discriminated union `{ kind: "RecycleBin" } | { kind: "Permanent" }`.
 /// Versioned is DESCOPED from Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum DeletionPolicy {
+    #[default]
     RecycleBin,
     Permanent,
-}
-impl Default for DeletionPolicy {
-    fn default() -> Self {
-        DeletionPolicy::RecycleBin
-    }
 }
 
 /// Big-delete guard (Product Decision 1). The two-field struct matches the locked

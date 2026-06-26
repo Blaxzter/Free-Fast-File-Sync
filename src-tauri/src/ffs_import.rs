@@ -239,7 +239,7 @@ fn ffs_to_glob(item: &str) -> (Option<String>, Option<String>) {
     }
 
     let note = if review {
-        Some(format!("Review imported exclude: '{}'  →  '{}'", raw, g))
+        Some(format!("Review imported exclude: '{raw}'  →  '{g}'"))
     } else {
         None
     };
