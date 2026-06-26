@@ -24,6 +24,70 @@
   color: var(--text-muted);
 }
 
+/* ---- Settings form controls ---- */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 360px;
+}
+.fieldLabel {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.fieldHint {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.numInput {
+  width: 140px;
+  height: var(--ctrl-h);
+  padding: 0 var(--sp-4);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-variant-numeric: tabular-nums;
+}
+.numInput:hover,
+.select:hover {
+  border-color: var(--border-strong);
+}
+.numInput:focus-visible,
+.select:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
+}
+.select {
+  width: 180px;
+  height: var(--ctrl-h);
+  padding: 0 var(--sp-4);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-body);
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+}
+.error {
+  font-size: var(--fs-sm);
+  color: var(--danger-fg);
+}
+.saved {
+  font-size: var(--fs-sm);
+  color: var(--ok-fg);
+}
+
 .importList {
   display: flex;
   flex-direction: column;

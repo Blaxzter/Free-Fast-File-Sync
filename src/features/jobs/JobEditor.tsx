@@ -40,6 +40,15 @@ const COMPARE_MODES: { value: CompareMode; label: string }[] = [
   { value: "Content", label: "Content hash (thorough)" },
 ];
 
+/** RHF setValueAs for an OPTIONAL positive-integer override field: a blank or
+ * non-positive value means "inherit the global default" (undefined => omitted =>
+ * Rust None). Keeps the editor from sending 0/NaN for an untouched override. */
+const optPosInt = (v: unknown): number | undefined => {
+  if (v === "" || v == null) return undefined;
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
+
 interface Props {
   /** When set, load + edit an existing job; otherwise a fresh job. */
   jobId?: string;
@@ -240,6 +249,45 @@ export function JobEditor({ jobId }: Props) {
               min="0"
               className={`${s.textInput} ${s.numInput}`}
               {...register("settings.big_delete.abs", { valueAsNumber: true })}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Performance — optional per-job overrides of the global Settings defaults */}
+      <section className={s.section}>
+        <h2 className={s.sectionTitle}>Performance</h2>
+        <p className={s.sectionHint}>
+          Optional overrides of the global defaults (Settings). Leave blank to inherit. A flaky NAS
+          benefits from a low thread count; a coarse-granularity target from a wider mtime
+          tolerance.
+        </p>
+        <div className={s.fieldRow}>
+          <div className={s.field}>
+            <label className={s.fieldLabel} htmlFor="job-threads">
+              Scan walker threads (per root)
+            </label>
+            <input
+              id="job-threads"
+              type="number"
+              min="0"
+              max="256"
+              placeholder="inherit"
+              className={`${s.textInput} ${s.numInput}`}
+              {...register("settings.scan_threads", { setValueAs: optPosInt })}
+            />
+          </div>
+          <div className={s.field}>
+            <label className={s.fieldLabel} htmlFor="job-gran">
+              mtime tolerance (ms)
+            </label>
+            <input
+              id="job-gran"
+              type="number"
+              min="0"
+              placeholder="inherit"
+              className={`${s.textInput} ${s.numInput}`}
+              {...register("settings.mtime_gran_ms", { setValueAs: optPosInt })}
             />
           </div>
         </div>

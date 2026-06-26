@@ -13,6 +13,7 @@ import {
   zFfsImport,
   zJob,
   zPreviewJobResult,
+  zSettings,
 } from "../domain/schemas";
 import type {
   BaselineStatusKind,
@@ -21,6 +22,7 @@ import type {
   Job,
   PreviewJobResult,
   Resolution,
+  Settings,
 } from "./bindings";
 
 // ---- Job store ----
@@ -82,6 +84,18 @@ export async function executeJob(
 export async function cancelRun(runId: string): Promise<boolean> {
   const raw = await invoke("cancel_run", { runId });
   return z.boolean().parse(raw);
+}
+
+// ---- Global settings ----
+
+export async function getSettings(): Promise<Settings> {
+  const raw = await invoke("get_settings");
+  return zSettings.parse(raw);
+}
+
+export async function saveSettings(settings: Settings): Promise<Settings> {
+  const raw = await invoke("save_settings", { settings });
+  return zSettings.parse(raw);
 }
 
 // ---- FFS import ----

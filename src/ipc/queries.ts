@@ -3,7 +3,15 @@
 
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { BaselineStatusKind, Job } from "./bindings";
-import { getJob, getPairBaselineStatus, listJobs } from "./commands";
+import { getJob, getPairBaselineStatus, getSettings, listJobs } from "./commands";
+
+/** Global application settings (get_settings). */
+export function useSettings() {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: getSettings,
+  });
+}
 
 /** All persisted jobs (list_jobs). */
 export function useJobs() {

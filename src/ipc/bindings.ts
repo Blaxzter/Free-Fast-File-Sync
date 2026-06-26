@@ -162,6 +162,12 @@ export interface JobSettings {
   deletion: DeletionPolicy;
   big_delete: BigDeleteGuard;
   filter: IgnorePolicy;
+  /** Per-job override of the scan walker thread count (per root). Omitted =>
+   * inherit the global Settings default. */
+  scan_threads?: number;
+  /** Per-job override of the mtime comparison tolerance, in milliseconds.
+   * Omitted => inherit the global default. */
+  mtime_gran_ms?: number;
 }
 
 export interface FolderPair {
@@ -184,6 +190,20 @@ export interface Job {
   updated_at: string;
   settings: JobSettings;
   pairs: FolderPair[];
+}
+
+// ---- settings.rs (global, user-facing defaults) ----
+
+/** Global application settings (settings.rs Settings). Not per-job. */
+export interface Settings {
+  /** Default scan walker threads per root. 0 => auto (conservative, CPU-sized). */
+  scan_threads: number;
+  /** Default mtime comparison tolerance, in milliseconds. 0 => engine default (10ms). */
+  mtime_gran_ms: number;
+  /** Live scan-progress ticker interval, in milliseconds (clamped 30..=2000 at use). */
+  scan_ticker_ms: number;
+  /** tracing filter directive for the diagnostic log ("info", "debug", …). */
+  log_level: string;
 }
 
 // ---- lib.rs multi-pair run surface ----

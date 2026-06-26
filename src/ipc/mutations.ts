@@ -5,7 +5,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "../app/store";
-import type { ExecuteJobResult, Job, PreviewJobResult, Resolution } from "./bindings";
+import type { ExecuteJobResult, Job, PreviewJobResult, Resolution, Settings } from "./bindings";
 import {
   cancelRun as cancelRunCmd,
   deleteJob,
@@ -13,6 +13,7 @@ import {
   executeJob,
   previewJob,
   saveJob,
+  saveSettings,
 } from "./commands";
 
 // ---- Run surface ----
@@ -89,6 +90,17 @@ export function useDeleteJob() {
     mutationFn: (jobId) => deleteJob(jobId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+/** Persist global settings (save_settings). Refreshes the settings cache. */
+export function useSaveSettings() {
+  const qc = useQueryClient();
+  return useMutation<Settings, unknown, Settings>({
+    mutationFn: (settings) => saveSettings(settings),
+    onSuccess: (saved) => {
+      qc.setQueryData(["settings"], saved);
     },
   });
 }

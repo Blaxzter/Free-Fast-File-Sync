@@ -157,6 +157,17 @@ export const zJobSettings = z.object({
   deletion: zDeletionPolicy,
   big_delete: zBigDeleteGuard,
   filter: zIgnorePolicy,
+  scan_threads: z.number().int().nonnegative().optional(),
+  mtime_gran_ms: z.number().int().nonnegative().optional(),
+});
+
+// ---- settings.rs (global) ----
+
+export const zSettings = z.object({
+  scan_threads: z.number().int().nonnegative(),
+  mtime_gran_ms: z.number().int().nonnegative(),
+  scan_ticker_ms: z.number().int().nonnegative(),
+  log_level: z.string(),
 });
 
 export const zFolderPair = z.object({
