@@ -10,11 +10,12 @@ use crate::error::{Result, SyncError};
 use crate::model::{EntryKind, Meta};
 use crate::pathutil::nfc_key;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use std::collections::BTreeMap;
 use std::fs::Metadata;
 use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
 pub struct ScanResult {
@@ -66,84 +67,110 @@ pub fn scan_root(root: &Path, policy: &IgnorePolicy, hash_files: bool) -> Result
         !custom_for_filter.matched(dent.path(), is_dir).is_ignore()
     });
 
-    let mut entries = BTreeMap::new();
-    let mut skipped = Vec::new();
-    let mut errors = Vec::new();
-
-    for result in builder.build() {
-        let dent = match result {
-            Ok(d) => d,
-            Err(e) => {
-                // Could not enumerate a (sub)tree. The mere presence of an error
-                // means part of the tree is unknown, so deletions get suppressed
-                // for the whole run regardless of which path failed.
-                errors.push((String::new(), format!("walk error: {e}")));
-                continue;
-            }
-        };
-        let path = dent.path();
-        if path == root {
-            continue;
-        }
-        let rel = match path.strip_prefix(root) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let key = nfc_key(rel);
-        if key.is_empty() {
-            continue;
-        }
-
-        // lstat-style metadata (does not follow symlinks).
-        let md = match dent.metadata() {
-            Ok(m) => m,
-            Err(e) => {
-                // A path we KNOW exists but can't stat — unknown, not deleted.
-                errors.push((key, format!("stat failed: {e}")));
-                continue;
-            }
-        };
-
-        if let Some(reason) = unsafe_to_sync(&md, dent.file_type()) {
-            skipped.push((key, reason.to_string()));
-            continue;
-        }
-
-        let kind = if md.is_dir() {
-            EntryKind::Dir
-        } else if md.is_file() {
-            EntryKind::File
-        } else {
-            skipped.push((key, "special file (fifo/socket/device)".to_string()));
-            continue;
-        };
-
-        // In verify mode, hash file content now so change detection uses content
-        // identity, not just size+mtime. A transient read failure degrades to
-        // metadata (hash stays None) rather than blocking the whole run.
-        let mut hash = None;
-        if kind == EntryKind::File && hash_files {
-            match hash_file(path) {
-                Ok(h) => hash = Some(h),
-                Err(e) => skipped.push((key.clone(), format!("hash unavailable: {e}"))),
-            }
-        }
-
-        entries.insert(
-            key,
-            Meta {
-                kind,
-                size: if kind == EntryKind::File { md.len() } else { 0 },
-                mtime_ns: mtime_ns(&md),
-                hash,
-            },
-        );
+    // Walk across a thread pool (the `ignore` crate manages the threads). This is
+    // the speed lever over a network share: directory reads and per-entry stats
+    // (and hashing in verify mode) overlap instead of serializing one round-trip
+    // at a time. Each worker does the expensive metadata/hash work, then briefly
+    // locks the shared accumulator to record its result.
+    #[derive(Default)]
+    struct Acc {
+        entries: BTreeMap<String, Meta>,
+        skipped: Vec<(String, String)>,
+        errors: Vec<(String, String)>,
     }
+    let acc = Mutex::new(Acc::default());
 
+    builder.build_parallel().run(|| {
+        Box::new(|result| {
+            let dent = match result {
+                Ok(d) => d,
+                Err(e) => {
+                    // Could not enumerate a (sub)tree. The mere presence of an
+                    // error means part of the tree is unknown, so deletions get
+                    // suppressed for the whole run regardless of which path failed.
+                    acc.lock()
+                        .unwrap()
+                        .errors
+                        .push((String::new(), format!("walk error: {e}")));
+                    return WalkState::Continue;
+                }
+            };
+            let path = dent.path();
+            if path == root {
+                return WalkState::Continue;
+            }
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r,
+                Err(_) => return WalkState::Continue,
+            };
+            let key = nfc_key(rel);
+            if key.is_empty() {
+                return WalkState::Continue;
+            }
+
+            // lstat-style metadata (does not follow symlinks).
+            let md = match dent.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    // A path we KNOW exists but can't stat — unknown, not deleted.
+                    acc.lock()
+                        .unwrap()
+                        .errors
+                        .push((key, format!("stat failed: {e}")));
+                    return WalkState::Continue;
+                }
+            };
+
+            if let Some(reason) = unsafe_to_sync(&md, dent.file_type()) {
+                acc.lock().unwrap().skipped.push((key, reason.to_string()));
+                return WalkState::Continue;
+            }
+
+            let kind = if md.is_dir() {
+                EntryKind::Dir
+            } else if md.is_file() {
+                EntryKind::File
+            } else {
+                acc.lock()
+                    .unwrap()
+                    .skipped
+                    .push((key, "special file (fifo/socket/device)".to_string()));
+                return WalkState::Continue;
+            };
+
+            // In verify mode, hash file content now so change detection uses
+            // content identity, not just size+mtime. A transient read failure
+            // degrades to metadata (hash stays None) rather than blocking the run.
+            let mut hash = None;
+            if kind == EntryKind::File && hash_files {
+                match hash_file(path) {
+                    Ok(h) => hash = Some(h),
+                    Err(e) => acc
+                        .lock()
+                        .unwrap()
+                        .skipped
+                        .push((key.clone(), format!("hash unavailable: {e}"))),
+                }
+            }
+
+            acc.lock().unwrap().entries.insert(
+                key,
+                Meta {
+                    kind,
+                    size: if kind == EntryKind::File { md.len() } else { 0 },
+                    mtime_ns: mtime_ns(&md),
+                    hash,
+                },
+            );
+            WalkState::Continue
+        })
+    });
+
+    let acc = acc.into_inner().unwrap();
     Ok(ScanResult {
-        entries,
-        skipped,
-        errors,
+        entries: acc.entries,
+        skipped: acc.skipped,
+        errors: acc.errors,
     })
 }
 
