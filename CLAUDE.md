@@ -3,6 +3,13 @@
 Reliable, fast two-way file sync that natively respects `.gitignore`. Rust core
 (`src-tauri/`) + Tauri 2 + React/TS (`src/`), pnpm.
 
+## Principles
+
+- **Surface every configurable to the user.** Anything tunable belongs in a Settings
+  screen and/or a per-job/per-pair override — not a hardcoded constant. Sensible default
+  + a user-facing knob. (e.g. the scan walker thread count, mtime granularity, big-delete
+  guard, ticker interval.) New controls follow the Radix-on-tokens convention below.
+
 ## Formatting (run before finishing — both are idempotent)
 
 - **Rust:** `cd src-tauri && cargo fmt` (config: `src-tauri/rustfmt.toml`, edition 2021)
