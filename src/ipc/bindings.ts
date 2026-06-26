@@ -141,12 +141,7 @@ export type CompareMode = "TimeAndSize" | "Content";
 
 /** Persisted 5-way direction (job.rs SyncDirection). Maps to {SyncMode, swap}
  * at fan-out (Rust authoritative; frontend mirror lives in domain/job.ts). */
-export type SyncDirection =
-  | "TwoWay"
-  | "MirrorAtoB"
-  | "MirrorBtoA"
-  | "UpdateAtoB"
-  | "UpdateBtoA";
+export type SyncDirection = "TwoWay" | "MirrorAtoB" | "MirrorBtoA" | "UpdateAtoB" | "UpdateBtoA";
 
 /** job.rs DeletionPolicy — serde(tag = "kind"). Versioning is descoped. */
 export type DeletionPolicy = { kind: "RecycleBin" } | { kind: "Permanent" };

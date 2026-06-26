@@ -17,7 +17,12 @@ export function BigDeleteGate({ warning, confirmed, onConfirm }: Props) {
       {Math.round(warning.pct * 100)}% &gt; {Math.round(warning.threshold_pct * 100)}%). Review
       before applying.
       <label
-        style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--sp-2)",
+          marginTop: "var(--sp-3)",
+        }}
       >
         <input type="checkbox" checked={confirmed} onChange={(e) => onConfirm(e.target.checked)} />
         I&apos;ve reviewed these — allow the deletions

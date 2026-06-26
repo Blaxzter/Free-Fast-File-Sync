@@ -1,5 +1,5 @@
-import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 /** Vitest config for the frontend unit/component tests. jsdom env + the
  * jest-dom matchers setup. Tauri E2E (Playwright/WDIO) is a separate harness (S10). */

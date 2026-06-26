@@ -3,8 +3,8 @@
  * job's enabled pairs). Clicking navigates to the job detail. Baseline color
  * comes from meaning.ts (BASELINE_MEANING) — no hardcoded hex. */
 
-import type { Job } from "../../ipc/bindings";
 import { BASELINE_MEANING } from "../../domain/meaning";
+import type { Job } from "../../ipc/bindings";
 import { useJobBaselineStatus } from "../../ipc/queries";
 import { StatusDot } from "../primitives/StatusDot";
 import s from "./job.module.css";
@@ -20,12 +20,7 @@ export function JobRow({ job, onOpen }: Props) {
   const meaning = status ? BASELINE_MEANING[status] : undefined;
 
   return (
-    <button
-      type="button"
-      className={s.row}
-      onClick={() => onOpen(job.id)}
-      data-job-id={job.id}
-    >
+    <button type="button" className={s.row} onClick={() => onOpen(job.id)} data-job-id={job.id}>
       <span
         className={s.rowSwatch}
         style={job.color ? { background: job.color } : undefined}

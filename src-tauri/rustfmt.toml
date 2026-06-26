@@ -1,0 +1,4 @@
+# Pinned so `cargo fmt` and a direct `rustfmt` agree, and the tree stays
+# canonical. Once the tree is formatted, any later `cargo fmt` is a no-op on
+# files an agent did not touch — so feature work produces no out-of-scope churn.
+edition = "2021"

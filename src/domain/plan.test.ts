@@ -77,12 +77,7 @@ describe("rank / visibleItems", () => {
 
     const shown = visibleItems(p, true);
     // conflict (0) < copy (2) < in-sync (9, ties broken by path).
-    expect(shown.map((i) => i.path)).toEqual([
-      "m-conflict",
-      "z-copy",
-      "a-noop",
-      "b-baseline",
-    ]);
+    expect(shown.map((i) => i.path)).toEqual(["m-conflict", "z-copy", "a-noop", "b-baseline"]);
   });
 });
 

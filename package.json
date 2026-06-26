@@ -16,7 +16,9 @@
     "test:watch": "vitest",
     "e2e:mocked": "playwright test",
     "e2e:native": "wdio run wdio.conf.ts",
-    "gen:testdata": "node scripts/gen-testdata.mjs"
+    "gen:testdata": "node scripts/gen-testdata.mjs",
+    "format": "biome check --write .",
+    "format:check": "biome check ."
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.1",
@@ -32,6 +34,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.1",
     "@playwright/test": "^1.50.1",
     "@tauri-apps/cli": "2.11.3",
     "@testing-library/jest-dom": "^6.6.3",

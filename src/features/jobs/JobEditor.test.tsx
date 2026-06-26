@@ -8,9 +8,6 @@
  * IPC is faked with @tauri-apps/api/mocks mockIPC: save_job echoes the job back
  * (and we capture its argument to assert the submitted shape). */
 
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -19,7 +16,10 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job } from "../../domain/job";
 import { JobEditor } from "./JobEditor";
 

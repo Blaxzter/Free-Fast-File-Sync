@@ -68,7 +68,9 @@ impl Baseline {
         if checksum(&disk.entries) != disk.checksum {
             return LoadOutcome::Corrupt;
         }
-        LoadOutcome::Loaded(Baseline { entries: disk.entries })
+        LoadOutcome::Loaded(Baseline {
+            entries: disk.entries,
+        })
     }
 
     /// Atomically persist: temp file in the same dir, fsync, then rename over the
@@ -90,7 +92,8 @@ impl Baseline {
         let tmp = dir.join(format!(".ffs-tmp-baseline-{}", std::process::id()));
         {
             let mut f = std::fs::File::create(&tmp).map_err(|e| SyncError::from_io(&tmp, &e))?;
-            f.write_all(&bytes).map_err(|e| SyncError::from_io(&tmp, &e))?;
+            f.write_all(&bytes)
+                .map_err(|e| SyncError::from_io(&tmp, &e))?;
             f.sync_all().map_err(|e| SyncError::from_io(&tmp, &e))?;
         }
         std::fs::rename(&tmp, path).map_err(|e| {
@@ -114,7 +117,12 @@ mod tests {
     use tempfile::tempdir;
 
     fn meta() -> Meta {
-        Meta { kind: EntryKind::File, size: 3, mtime_ns: 123, hash: Some("ab".into()) }
+        Meta {
+            kind: EntryKind::File,
+            size: 3,
+            mtime_ns: 123,
+            hash: Some("ab".into()),
+        }
     }
 
     #[test]

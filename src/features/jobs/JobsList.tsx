@@ -5,11 +5,11 @@
 
 import { useNavigate } from "@tanstack/react-router";
 import { FolderSync, Plus } from "lucide-react";
-import { useJobs } from "../../ipc/queries";
 import { JobRow } from "../../components/job/JobRow";
-import { EmptyState } from "../../components/primitives/EmptyState";
-import { Button } from "../../components/primitives/Button";
 import s from "../../components/job/job.module.css";
+import { Button } from "../../components/primitives/Button";
+import { EmptyState } from "../../components/primitives/EmptyState";
+import { useJobs } from "../../ipc/queries";
 
 export function JobsList() {
   const navigate = useNavigate();

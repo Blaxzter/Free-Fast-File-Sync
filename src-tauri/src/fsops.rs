@@ -49,7 +49,8 @@ pub fn meta_matches(cur: Option<&Meta>, expected: Option<&Meta>, gran_ns: i64) -
         (None, None) => true,
         (Some(c), Some(e)) => {
             c.kind == e.kind
-                && (e.is_dir() || (c.size == e.size && mtime_close(c.mtime_ns, e.mtime_ns, gran_ns)))
+                && (e.is_dir()
+                    || (c.size == e.size && mtime_close(c.mtime_ns, e.mtime_ns, gran_ns)))
         }
         _ => false,
     }
@@ -66,11 +67,7 @@ pub fn atomic_copy(src: &Path, dst: &Path) -> Result<u64> {
     let expected = src_md.len();
 
     let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let tmp = dst.with_file_name(format!(
-        ".ffs-tmp-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let tmp = dst.with_file_name(format!(".ffs-tmp-{}-{}", std::process::id(), n));
 
     let copied = (|| -> std::io::Result<u64> {
         let mut reader = std::fs::File::open(extended(src))?;
@@ -112,10 +109,12 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
 /// so the item is marked failed and its baseline entry is preserved.
 pub fn recycle_file(path: &Path, use_recycle: bool) -> Result<()> {
     if use_recycle {
-        return trash::delete(path).map_err(|e| SyncError::Other(format!(
-            "could not move {} to recycle bin: {e}",
-            path.display()
-        )));
+        return trash::delete(path).map_err(|e| {
+            SyncError::Other(format!(
+                "could not move {} to recycle bin: {e}",
+                path.display()
+            ))
+        });
     }
     std::fs::remove_file(extended(path)).map_err(|e| SyncError::from_io(path, &e))
 }
@@ -148,11 +147,7 @@ pub fn remove_dir_if_empty(path: &Path, use_recycle: bool) -> Result<()> {
 pub fn gc_orphan_temps(dir: &Path) {
     if let Ok(rd) = std::fs::read_dir(extended(dir)) {
         for entry in rd.flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".ffs-tmp-")
-            {
+            if entry.file_name().to_string_lossy().starts_with(".ffs-tmp-") {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
@@ -211,9 +206,24 @@ mod tests {
 
     #[test]
     fn meta_matches_detects_drift() {
-        let a = Meta { kind: EntryKind::File, size: 10, mtime_ns: 100, hash: None };
-        let b = Meta { kind: EntryKind::File, size: 10, mtime_ns: 100, hash: None };
-        let c = Meta { kind: EntryKind::File, size: 11, mtime_ns: 100, hash: None };
+        let a = Meta {
+            kind: EntryKind::File,
+            size: 10,
+            mtime_ns: 100,
+            hash: None,
+        };
+        let b = Meta {
+            kind: EntryKind::File,
+            size: 10,
+            mtime_ns: 100,
+            hash: None,
+        };
+        let c = Meta {
+            kind: EntryKind::File,
+            size: 11,
+            mtime_ns: 100,
+            hash: None,
+        };
         assert!(meta_matches(Some(&a), Some(&b), 0));
         assert!(!meta_matches(Some(&a), Some(&c), 0));
         assert!(!meta_matches(None, Some(&a), 0));

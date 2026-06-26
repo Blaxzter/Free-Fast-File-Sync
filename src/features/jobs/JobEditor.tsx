@@ -9,25 +9,20 @@
  * as a form-level banner. Submit -> useSaveJob, then back to /jobs. No invoke
  * here — only the useSaveJob mutation (which goes through ipc/commands). */
 
-import { useEffect, useState } from "react";
-import { useForm, Controller } from "react-hook-form";
 import { useNavigate } from "@tanstack/react-router";
-import type {
-  CompareMode,
-  DeletionPolicy,
-  Job,
-  SyncDirection,
-} from "../../domain/job";
+import { useEffect, useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { FilterEditor } from "../../components/filter/FilterEditor";
+import s from "../../components/job/job.module.css";
+import { PairList } from "../../components/job/PairList";
+import { Banner } from "../../components/primitives/Banner";
+import { Button } from "../../components/primitives/Button";
+import type { CompareMode, DeletionPolicy, Job, SyncDirection } from "../../domain/job";
 import { directionMode, newJob } from "../../domain/job";
+import { DELETION_MEANING, MODE_MEANING } from "../../domain/meaning";
+import { errorMessage } from "../../ipc/errors";
 import { useSaveJob } from "../../ipc/mutations";
 import { useJob } from "../../ipc/queries";
-import { errorMessage } from "../../ipc/errors";
-import { DELETION_MEANING, MODE_MEANING } from "../../domain/meaning";
-import { Button } from "../../components/primitives/Button";
-import { Banner } from "../../components/primitives/Banner";
-import { FilterEditor } from "../../components/filter/FilterEditor";
-import { PairList } from "../../components/job/PairList";
-import s from "../../components/job/job.module.css";
 
 const DELETION_KINDS: DeletionPolicy["kind"][] = ["RecycleBin", "Permanent"];
 
@@ -123,12 +118,7 @@ export function JobEditor({ jobId }: Props) {
             <label className={s.fieldLabel} htmlFor="job-color">
               Color
             </label>
-            <input
-              id="job-color"
-              type="color"
-              className={s.colorInput}
-              {...register("color")}
-            />
+            <input id="job-color" type="color" className={s.colorInput} {...register("color")} />
           </div>
         </div>
       </section>
@@ -136,9 +126,7 @@ export function JobEditor({ jobId }: Props) {
       {/* Filter */}
       <section className={s.section}>
         <h2 className={s.sectionTitle}>Filter</h2>
-        <p className={s.sectionHint}>
-          Applies to every pair unless a pair overrides it.
-        </p>
+        <p className={s.sectionHint}>Applies to every pair unless a pair overrides it.</p>
         <Controller
           control={control}
           name="settings.filter"
@@ -207,8 +195,8 @@ export function JobEditor({ jobId }: Props) {
 
         {oneWay && (
           <Banner intent="warn">
-            One-way {MODE_MEANING[directionMode(direction)].label} sync: changes flow
-            in a single direction.
+            One-way {MODE_MEANING[directionMode(direction)].label} sync: changes flow in a single
+            direction.
             {direction.startsWith("Mirror")
               ? " Mirror makes the destination a faithful copy — extra files on the destination are deleted."
               : " Update is additive — it copies onto the destination but never deletes there."}

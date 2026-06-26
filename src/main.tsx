@@ -1,9 +1,9 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
-import { router } from "./app/router";
+import React from "react";
+import ReactDOM from "react-dom/client";
 import { queryClient } from "./app/queryClient";
+import { router } from "./app/router";
 import { subscribeRunEvents } from "./app/store";
 import "./styles/tokens.css";
 import "./styles/global.css";

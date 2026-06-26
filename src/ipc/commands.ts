@@ -6,6 +6,14 @@
  * The retired single-pair preview_sync/execute_sync/cancel_sync wrappers are gone. */
 
 import { invoke } from "@tauri-apps/api/core";
+import { z } from "zod";
+import {
+  zBaselineStatusKind,
+  zExecuteJobResult,
+  zFfsImport,
+  zJob,
+  zPreviewJobResult,
+} from "../domain/schemas";
 import type {
   BaselineStatusKind,
   ExecuteJobResult,
@@ -14,14 +22,6 @@ import type {
   PreviewJobResult,
   Resolution,
 } from "./bindings";
-import {
-  zBaselineStatusKind,
-  zExecuteJobResult,
-  zFfsImport,
-  zJob,
-  zPreviewJobResult,
-} from "../domain/schemas";
-import { z } from "zod";
 
 // ---- Job store ----
 
@@ -63,10 +63,7 @@ export async function getPairBaselineStatus(
 
 /** preview_job(job_id, pair_ids?) -> { run_id, pairs:[{pair_id, plan, baseline_status}] }.
  * On success the run slot stays HELD until executeJob/cancelRun releases it. */
-export async function previewJob(
-  jobId: string,
-  pairIds?: string[],
-): Promise<PreviewJobResult> {
+export async function previewJob(jobId: string, pairIds?: string[]): Promise<PreviewJobResult> {
   const raw = await invoke("preview_job", { jobId, pairIds: pairIds ?? null });
   return zPreviewJobResult.parse(raw) as PreviewJobResult;
 }

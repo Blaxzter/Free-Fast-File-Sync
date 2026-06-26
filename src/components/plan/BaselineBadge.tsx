@@ -1,5 +1,5 @@
-import type { BaselineStatusKind } from "../../domain/plan";
 import { BASELINE_MEANING } from "../../domain/meaning";
+import type { BaselineStatusKind } from "../../domain/plan";
 import s from "./plan.module.css";
 
 /** Job-level baseline trust badge. Safety-amber/cyan when not Present. */

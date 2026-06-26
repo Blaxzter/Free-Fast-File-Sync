@@ -5,6 +5,16 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  ACTION_MEANING,
+  BASELINE_MEANING,
+  CHANGE_MEANING,
+  CONFLICT_MEANING,
+  DELETION_MEANING,
+  type Meaning,
+  MODE_MEANING,
+  STATUS_MEANING,
+} from "./meaning";
+import {
   zAction,
   zBaselineStatusKind,
   zChangeKind,
@@ -12,16 +22,6 @@ import {
   zItemStatus,
   zSyncMode,
 } from "./schemas";
-import {
-  ACTION_MEANING,
-  BASELINE_MEANING,
-  CHANGE_MEANING,
-  CONFLICT_MEANING,
-  DELETION_MEANING,
-  MODE_MEANING,
-  type Meaning,
-  STATUS_MEANING,
-} from "./meaning";
 
 /** Drive coverage from the Zod enum option lists (the serde variant strings). */
 const cases: Array<[string, readonly string[], Record<string, Meaning>]> = [

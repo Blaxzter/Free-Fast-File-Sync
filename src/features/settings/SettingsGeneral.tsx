@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useStore } from "../../app/store";
-import { Toggle } from "../../components/primitives/Toggle";
 import { Button } from "../../components/primitives/Button";
+import { Toggle } from "../../components/primitives/Toggle";
 import s from "./settings.module.css";
 
 /** Settings — General / Defaults. Density toggle is live; the rest are the
@@ -30,8 +30,8 @@ export function SettingsGeneral() {
         <span className={s.sectionTitle}>Defaults for new jobs</span>
         <span className={s.sectionDesc}>
           Compare mode, deletion policy, gitignore-on, and big-delete thresholds inherited by new
-          jobs. Editing these lands with the Job aggregate in a later phase. Current engine defaults:
-          gitignore on, deletions to recycle bin, big-delete guard at 25% or 100 files.
+          jobs. Editing these lands with the Job aggregate in a later phase. Current engine
+          defaults: gitignore on, deletions to recycle bin, big-delete guard at 25% or 100 files.
         </span>
       </div>
 

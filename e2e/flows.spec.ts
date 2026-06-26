@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /* Tier-1 mocked-IPC flow tests. Each test selects a fakeEngine scenario by
  * setting window.__E2E_SCENARIO__ BEFORE the app boots (addInitScript), then
@@ -19,7 +19,9 @@ async function gotoScenario(page: Page, scenario: string) {
   }, scenario);
   await page.goto("/");
   // Wait until the fake engine registered + the app mounted.
-  await page.waitForFunction(() => (window as unknown as { __E2E_READY__?: boolean }).__E2E_READY__ === true);
+  await page.waitForFunction(
+    () => (window as unknown as { __E2E_READY__?: boolean }).__E2E_READY__ === true,
+  );
   // The jobs list renders the seeded job row.
   await page.getByRole("button", { name: /job/i }).first().waitFor();
 }

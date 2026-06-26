@@ -1,9 +1,9 @@
 import { Outlet } from "@tanstack/react-router";
 import { useStore } from "../../app/store";
 import { Sidebar } from "./Sidebar";
-import { TopBar } from "./TopBar";
 import { StatusStrip } from "./StatusStrip";
 import s from "./shell.module.css";
+import { TopBar } from "./TopBar";
 
 /** Persistent 3-zone shell: sidebar + (topbar / routed content / status strip). */
 export function AppShell() {

@@ -4,6 +4,8 @@
  * invoke directly. */
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useStore } from "../app/store";
+import type { ExecuteJobResult, Job, PreviewJobResult, Resolution } from "./bindings";
 import {
   cancelRun as cancelRunCmd,
   deleteJob,
@@ -12,13 +14,6 @@ import {
   previewJob,
   saveJob,
 } from "./commands";
-import type {
-  ExecuteJobResult,
-  Job,
-  PreviewJobResult,
-  Resolution,
-} from "./bindings";
-import { useStore } from "../app/store";
 
 // ---- Run surface ----
 

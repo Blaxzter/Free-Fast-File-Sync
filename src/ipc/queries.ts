@@ -2,8 +2,8 @@
  * never touch invoke directly. */
 
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { getJob, getPairBaselineStatus, listJobs } from "./commands";
 import type { BaselineStatusKind, Job } from "./bindings";
+import { getJob, getPairBaselineStatus, listJobs } from "./commands";
 
 /** All persisted jobs (list_jobs). */
 export function useJobs() {
@@ -24,9 +24,7 @@ export function useJob(jobId: string | undefined) {
 
 /** The worst (most cautionary) baseline status wins when aggregating a job's
  * pairs into one badge: Corrupt > FirstSync > Present. An empty list => undefined. */
-export function aggregateBaseline(
-  kinds: BaselineStatusKind[],
-): BaselineStatusKind | undefined {
+export function aggregateBaseline(kinds: BaselineStatusKind[]): BaselineStatusKind | undefined {
   if (kinds.length === 0) return undefined;
   if (kinds.includes("Corrupt")) return "Corrupt";
   if (kinds.includes("FirstSync")) return "FirstSync";
@@ -48,17 +46,12 @@ export function useJobBaselineStatus(job: Job): {
     })),
   });
   const isLoading = results.some((r) => r.isLoading);
-  const kinds = results
-    .map((r) => r.data)
-    .filter((d): d is BaselineStatusKind => Boolean(d));
+  const kinds = results.map((r) => r.data).filter((d): d is BaselineStatusKind => Boolean(d));
   return { status: aggregateBaseline(kinds), isLoading };
 }
 
 /** Baseline status for one pair of a job (get_pair_baseline_status). */
-export function usePairBaselineStatus(
-  jobId: string | undefined,
-  pairId: string | undefined,
-) {
+export function usePairBaselineStatus(jobId: string | undefined, pairId: string | undefined) {
   const ready = Boolean(jobId && pairId);
   return useQuery({
     queryKey: ["pair-baseline", jobId, pairId],

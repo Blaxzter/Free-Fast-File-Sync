@@ -8,15 +8,15 @@
  * written with RHF setValue (the documented way to set programmatic values),
  * not a register().onChange hack. */
 
-import { useFieldArray, useWatch, type Control, type UseFormSetValue } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
+import { type Control, type UseFormSetValue, useFieldArray, useWatch } from "react-hook-form";
 import type { Job } from "../../domain/job";
 import { directionMode, newFolderPair } from "../../domain/job";
 import { FolderPicker } from "../../features/jobs/FolderPicker";
 import { Button } from "../primitives/Button";
 import { Toggle } from "../primitives/Toggle";
-import { ModeBadge } from "./ModeBadge";
 import s from "./job.module.css";
+import { ModeBadge } from "./ModeBadge";
 
 interface Props {
   control: Control<Job>;
@@ -41,11 +41,7 @@ export function PairList({ control, setValue }: Props) {
         />
       ))}
       <div>
-        <Button
-          type="button"
-          onClick={() => append(newFolderPair())}
-          icon={<Plus size={14} />}
-        >
+        <Button type="button" onClick={() => append(newFolderPair())} icon={<Plus size={14} />}>
           Add folder pair
         </Button>
       </div>
@@ -62,14 +58,7 @@ interface CardProps {
   onRemove: () => void;
 }
 
-function PairCard({
-  control,
-  setValue,
-  index,
-  jobDirection,
-  canRemove,
-  onRemove,
-}: CardProps) {
+function PairCard({ control, setValue, index, jobDirection, canRemove, onRemove }: CardProps) {
   const pair = useWatch({ control, name: `pairs.${index}` });
   const direction = pair?.mode_override ?? jobDirection;
   const mode = directionMode(direction);
@@ -87,9 +76,7 @@ function PairCard({
           placeholder="Pair label (optional)"
           aria-label={`Pair ${index} label`}
           value={pair?.label ?? ""}
-          onChange={(e) =>
-            setValue(`pairs.${index}.label`, e.target.value, opts)
-          }
+          onChange={(e) => setValue(`pairs.${index}.label`, e.target.value, opts)}
         />
         <ModeBadge mode={mode} />
         <Button
@@ -107,17 +94,13 @@ function PairCard({
           label="Root A"
           side="a"
           value={rootA}
-          onPick={(path) =>
-            setValue(`pairs.${index}.root_a`, { kind: "Local", path }, opts)
-          }
+          onPick={(path) => setValue(`pairs.${index}.root_a`, { kind: "Local", path }, opts)}
         />
         <FolderPicker
           label="Root B"
           side="b"
           value={rootB}
-          onPick={(path) =>
-            setValue(`pairs.${index}.root_b`, { kind: "Local", path }, opts)
-          }
+          onPick={(path) => setValue(`pairs.${index}.root_b`, { kind: "Local", path }, opts)}
         />
       </div>
 

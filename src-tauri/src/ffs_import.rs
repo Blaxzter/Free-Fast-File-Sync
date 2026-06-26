@@ -156,8 +156,12 @@ fn detect_two_way(sync: Option<Node>) -> bool {
         return true;
     }
     if let Some(changes) = child(sync, "Changes") {
-        let left_to_right = child(changes, "Left").map(|l| attrs_point(l, "right")).unwrap_or(false);
-        let right_to_left = child(changes, "Right").map(|r| attrs_point(r, "left")).unwrap_or(false);
+        let left_to_right = child(changes, "Left")
+            .map(|l| attrs_point(l, "right"))
+            .unwrap_or(false);
+        let right_to_left = child(changes, "Right")
+            .map(|r| attrs_point(r, "left"))
+            .unwrap_or(false);
         return left_to_right && right_to_left;
     }
     if let Some(diff) = child(sync, "Differences") {
@@ -212,7 +216,10 @@ fn ffs_to_glob(item: &str) -> (Option<String>, Option<String>) {
     // Exclude item that's unusual — take the first non-empty token and flag it.
     let pat = if raw.contains('|') {
         review = true;
-        raw.split('|').map(|s| s.trim()).find(|s| !s.is_empty()).unwrap_or("")
+        raw.split('|')
+            .map(|s| s.trim())
+            .find(|s| !s.is_empty())
+            .unwrap_or("")
     } else {
         raw
     };
@@ -241,9 +248,24 @@ fn ffs_to_glob(item: &str) -> (Option<String>, Option<String>) {
 
 fn gitignore_hint(globs: &[String]) -> Option<String> {
     const COMMON: &[&str] = &[
-        "node_modules", ".git", "build", "dist", "__pycache__", "venv", ".venv", ".nuxt",
-        ".angular", ".yarn", ".idea", ".terraform", ".pytest_cache", ".ruff_cache", ".settings",
-        "target", ".metadata", "bin",
+        "node_modules",
+        ".git",
+        "build",
+        "dist",
+        "__pycache__",
+        "venv",
+        ".venv",
+        ".nuxt",
+        ".angular",
+        ".yarn",
+        ".idea",
+        ".terraform",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".settings",
+        "target",
+        ".metadata",
+        "bin",
     ];
     let n = globs
         .iter()
@@ -367,8 +389,13 @@ mod tests {
     fn local_filter_combines_with_global() {
         let imp = parse_ffs(SAMPLE).unwrap();
         // pair 3 keeps the global excludes AND its own .ruff_cache.
-        assert!(imp.jobs[2].exclude_globs.contains(&"node_modules/".to_string()));
-        assert!(imp.jobs[2].exclude_globs.iter().any(|x| x.contains(".ruff_cache")));
+        assert!(imp.jobs[2]
+            .exclude_globs
+            .contains(&"node_modules/".to_string()));
+        assert!(imp.jobs[2]
+            .exclude_globs
+            .iter()
+            .any(|x| x.contains(".ruff_cache")));
     }
 
     #[test]
@@ -397,11 +424,24 @@ mod tests {
             eprintln!(
                 "  • {}  [{}]  {} excludes{}",
                 j.name,
-                if j.two_way { "two-way" } else { "one-way mirror" },
+                if j.two_way {
+                    "two-way"
+                } else {
+                    "one-way mirror"
+                },
                 j.exclude_globs.len(),
-                if j.gitignore_hint.is_some() { "  (gitignore can cover most)" } else { "" },
+                if j.gitignore_hint.is_some() {
+                    "  (gitignore can cover most)"
+                } else {
+                    ""
+                },
             );
-            eprintln!("      {}  {}  {}", j.left, if j.two_way { "<->" } else { "-->" }, j.right);
+            eprintln!(
+                "      {}  {}  {}",
+                j.left,
+                if j.two_way { "<->" } else { "-->" },
+                j.right
+            );
         }
         eprintln!("\nsample translated globs (pair 1):");
         for g in imp.jobs[0].exclude_globs.iter().take(12) {

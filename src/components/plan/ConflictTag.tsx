@@ -1,5 +1,5 @@
-import type { ConflictType } from "../../domain/plan";
 import { CONFLICT_MEANING } from "../../domain/meaning";
+import type { ConflictType } from "../../domain/plan";
 import s from "../primitives/primitives.module.css";
 import p from "./plan.module.css";
 

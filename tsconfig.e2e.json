@@ -12,10 +12,5 @@
     "esModuleInterop": true,
     "isolatedModules": true
   },
-  "include": [
-    "playwright.config.ts",
-    "wdio.conf.ts",
-    "e2e/**/*.ts",
-    "e2e-native/**/*.ts"
-  ]
+  "include": ["playwright.config.ts", "wdio.conf.ts", "e2e/**/*.ts", "e2e-native/**/*.ts"]
 }

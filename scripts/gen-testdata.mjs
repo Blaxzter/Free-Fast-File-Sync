@@ -21,16 +21,17 @@
  * Also available as: pnpm gen:testdata -- --scenario mutate
  */
 
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 
 // --- args -----------------------------------------------------------------
 function parseArgs(argv) {
   const out = { scenario: "fresh", root: null, scale: 0 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--") continue; // pnpm/npm forward a bare separator; ignore it
+    if (a === "--")
+      continue; // pnpm/npm forward a bare separator; ignore it
     else if (a === "--scenario") out.scenario = argv[++i];
     else if (a === "--root") out.root = argv[++i];
     else if (a === "--scale") out.scale = parseInt(argv[++i], 10) || 0;
@@ -42,7 +43,9 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 if (args.help) {
-  console.log("node scripts/gen-testdata.mjs [--scenario fresh|mutate|reset] [--root <path>] [--scale N]");
+  console.log(
+    "node scripts/gen-testdata.mjs [--scenario fresh|mutate|reset] [--root <path>] [--scale N]",
+  );
   process.exit(0);
 }
 if (!["fresh", "mutate", "reset"].includes(args.scenario)) {
@@ -113,7 +116,10 @@ function appendOnce(path, marker, content) {
 
 /** Deterministic lorem-ish text of `lines` lines, seeded by `key`. */
 function lorem(key, lines) {
-  const words = "sync delta baseline reconcile mirror gitignore conflict copy hash atomic recycle watcher schedule chunk blake3 walk filter".split(" ");
+  const words =
+    "sync delta baseline reconcile mirror gitignore conflict copy hash atomic recycle watcher schedule chunk blake3 walk filter".split(
+      " ",
+    );
   const rng = mulberry32(seedFrom(key));
   const out = [];
   for (let i = 0; i < lines; i++) {
@@ -224,7 +230,9 @@ function summaryFresh() {
   console.log(`  Side A : ${L}`);
   console.log(`  Side B : ${R}\n`);
   console.log("Expected on first Preview (no baseline yet):");
-  console.log("  in-sync   : .gitignore, README.md, docs/*, src/index.ts, src/util/helpers.ts, assets/logo.txt");
+  console.log(
+    "  in-sync   : .gitignore, README.md, docs/*, src/index.ts, src/util/helpers.ts, assets/logo.txt",
+  );
   console.log("  Copy A->B : src/left_only_feature.ts, notes/left-note.txt");
   console.log("  Copy B->A : src/right_only_feature.ts, notes/right-note.txt");
   console.log("  CONFLICT  : config.json, src/conflict.ts  (same path, different content)");

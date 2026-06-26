@@ -1,11 +1,11 @@
-import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FileDown } from "lucide-react";
+import { useState } from "react";
+import { Banner } from "../../components/primitives/Banner";
+import { Button } from "../../components/primitives/Button";
 import type { FfsImport } from "../../ipc/bindings";
 import { importFfs } from "../../ipc/commands";
 import { errorMessage } from "../../ipc/errors";
-import { Button } from "../../components/primitives/Button";
-import { Banner } from "../../components/primitives/Banner";
 import s from "./settings.module.css";
 
 /** FreeFileSync import entry point. Keeps import_ffs reachable: pick a config,

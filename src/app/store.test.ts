@@ -4,9 +4,9 @@
  *  - a progress event for the ACTIVE run updates its mirror
  *  - a progress event for an UNKNOWN/foreign runId is DROPPED (no cross-talk) */
 
-import { describe, expect, it, beforeEach } from "vitest";
-import { useStore } from "./store";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { RunProgress } from "../ipc/bindings";
+import { useStore } from "./store";
 
 function progress(runId: string, pairId: string, done: number): RunProgress {
   return {

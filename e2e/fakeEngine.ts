@@ -14,8 +14,8 @@
  * IMPORTANT: this module is imported ONLY by src/main.tsx behind
  * `import.meta.env.VITE_E2E`, so it never enters a production bundle. */
 
-import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
+import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   ApplyReport,
   BaselineStatusKind,
@@ -182,7 +182,12 @@ function job(name: string): Job {
       direction: "TwoWay",
       deletion: { kind: "RecycleBin" },
       big_delete: { pct: 0.25, abs: 100 },
-      filter: { use_gitignore: true, use_dot_ignore: true, include_hidden: false, custom_globs: [] },
+      filter: {
+        use_gitignore: true,
+        use_dot_ignore: true,
+        include_hidden: false,
+        custom_globs: [],
+      },
     },
     pairs: [
       {
@@ -224,7 +229,11 @@ function buildScenario(name: string): Scenario {
     // Happy path: an EditEdit conflict + a couple of copies. After resolving +
     // applying, a re-preview converges to all-Noop.
     case "converge": {
-      const items = [editEditConflict("notes.txt"), copyItem("new-a.txt"), copyItem("new-b.txt", "BtoA")];
+      const items = [
+        editEditConflict("notes.txt"),
+        copyItem("new-a.txt"),
+        copyItem("new-b.txt", "BtoA"),
+      ];
       const converged = [noopItem("notes.txt"), noopItem("new-a.txt"), noopItem("new-b.txt")];
       return {
         job: job("Converge job"),

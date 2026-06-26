@@ -5,9 +5,6 @@
  * IPC is faked with mockIPC: list_jobs returns two jobs, get_pair_baseline_status
  * returns a status so the aggregated baseline badge can render. */
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -16,7 +13,10 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Job } from "../../domain/job";
 import { newJob } from "../../domain/job";
 import { JobsList } from "./JobsList";
@@ -28,7 +28,10 @@ function job(id: string, name: string): Job {
   return j;
 }
 
-const JOBS: Job[] = [job("01JOB0000000000000000000A", "Docs"), job("01JOB0000000000000000000B", "Photos")];
+const JOBS: Job[] = [
+  job("01JOB0000000000000000000A", "Docs"),
+  job("01JOB0000000000000000000B", "Photos"),
+];
 
 function installIpc() {
   mockIPC((cmd) => {

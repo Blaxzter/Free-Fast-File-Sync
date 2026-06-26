@@ -2,8 +2,8 @@
  * the DOM between tests. */
 
 import "@testing-library/jest-dom/vitest";
-import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
 
 // jsdom has no window.scrollTo; TanStack Router's scroll restoration calls it on
 // every navigation. Stub it so router-driven tests don't spew "Not implemented".

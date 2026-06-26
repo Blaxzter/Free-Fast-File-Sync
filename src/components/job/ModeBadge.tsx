@@ -3,8 +3,8 @@
  * pair runs. The five-way SyncDirection is collapsed to its SyncMode via
  * directionMode() before this renders. */
 
-import type { SyncMode } from "../../ipc/bindings";
 import { MODE_MEANING } from "../../domain/meaning";
+import type { SyncMode } from "../../ipc/bindings";
 import s from "./job.module.css";
 
 interface Props {

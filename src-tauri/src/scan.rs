@@ -140,7 +140,11 @@ pub fn scan_root(root: &Path, policy: &IgnorePolicy, hash_files: bool) -> Result
         );
     }
 
-    Ok(ScanResult { entries, skipped, errors })
+    Ok(ScanResult {
+        entries,
+        skipped,
+        errors,
+    })
 }
 
 fn build_custom_matcher(root: &Path, globs: &[String]) -> Result<Gitignore> {

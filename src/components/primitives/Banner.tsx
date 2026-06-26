@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, Info, ShieldAlert } from "lucide-react";
+import type { ReactNode } from "react";
 import s from "./primitives.module.css";
 
 export type BannerIntent = "info" | "ok" | "warn" | "danger";

@@ -7,20 +7,8 @@
  * safeParsed: a drifted/unknown shape is dropped rather than crashing the UI. */
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type {
-  RunFinished,
-  RunPairDone,
-  RunProgress,
-  RunScan,
-  RunStarted,
-} from "./bindings";
-import {
-  zRunFinished,
-  zRunPairDone,
-  zRunProgress,
-  zRunScan,
-  zRunStarted,
-} from "../domain/schemas";
+import { zRunFinished, zRunPairDone, zRunProgress, zRunScan, zRunStarted } from "../domain/schemas";
+import type { RunFinished, RunPairDone, RunProgress, RunScan, RunStarted } from "./bindings";
 
 /** A run claimed the slot; pairs are about to be scanned/applied. */
 export function onRunStarted(cb: (e: RunStarted) => void): Promise<UnlistenFn> {

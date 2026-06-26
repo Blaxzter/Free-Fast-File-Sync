@@ -3,13 +3,7 @@
  * backend change that breaks the contract fails loudly here, not in the UI. */
 
 import { describe, expect, it } from "vitest";
-import {
-  zDeletionPolicy,
-  zJob,
-  zPreviewJobResult,
-  zSyncMode,
-  zSyncPlan,
-} from "./schemas";
+import { zDeletionPolicy, zJob, zPreviewJobResult, zSyncMode, zSyncPlan } from "./schemas";
 
 /** A captured preview fixture shaped like model.rs SyncPlan serde output,
  * including a conflict row whose resolution_options serde skips when empty (the

@@ -69,13 +69,25 @@ pub fn reconcile(a: ChangeKind, b: ChangeKind, identical: bool) -> Decision {
 
         // ---- both changed the same way: converge or conflict ----
         (Created, Created) => {
-            if identical { Decision::plain(UpdateBaselineOnly) } else { Decision::conflict(CreateCreate) }
+            if identical {
+                Decision::plain(UpdateBaselineOnly)
+            } else {
+                Decision::conflict(CreateCreate)
+            }
         }
         (Modified, Modified) => {
-            if identical { Decision::plain(UpdateBaselineOnly) } else { Decision::conflict(EditEdit) }
+            if identical {
+                Decision::plain(UpdateBaselineOnly)
+            } else {
+                Decision::conflict(EditEdit)
+            }
         }
         (TypeChanged, TypeChanged) => {
-            if identical { Decision::plain(UpdateBaselineOnly) } else { Decision::conflict(TypeChangeTypeChange) }
+            if identical {
+                Decision::plain(UpdateBaselineOnly)
+            } else {
+                Decision::conflict(TypeChangeTypeChange)
+            }
         }
 
         // ---- both deleted: convergent, the only safe symmetric destroy ----
@@ -90,10 +102,12 @@ pub fn reconcile(a: ChangeKind, b: ChangeKind, identical: bool) -> Decision {
         // (a path cannot be Created on one side yet Modified/Deleted/TypeChanged
         //  on the other). Reaching here means the baseline assumptions were
         //  violated — refuse to act and force a rescan.
-        (Created, Modified) | (Created, Deleted) | (Created, TypeChanged)
-        | (Modified, Created) | (Deleted, Created) | (TypeChanged, Created) => {
-            Decision::conflict(StateDesync)
-        }
+        (Created, Modified)
+        | (Created, Deleted)
+        | (Created, TypeChanged)
+        | (Modified, Created)
+        | (Deleted, Created)
+        | (TypeChanged, Created) => Decision::conflict(StateDesync),
     }
 }
 
@@ -131,10 +145,20 @@ mod tests {
     use crate::model::{Action, EntryKind};
 
     fn file(size: u64, mtime: i64) -> Meta {
-        Meta { kind: EntryKind::File, size, mtime_ns: mtime, hash: None }
+        Meta {
+            kind: EntryKind::File,
+            size,
+            mtime_ns: mtime,
+            hash: None,
+        }
     }
     fn dir() -> Meta {
-        Meta { kind: EntryKind::Dir, size: 0, mtime_ns: 0, hash: None }
+        Meta {
+            kind: EntryKind::Dir,
+            size: 0,
+            mtime_ns: 0,
+            hash: None,
+        }
     }
 
     // ---- classify_change ----
@@ -143,20 +167,41 @@ mod tests {
     fn classify_created_deleted_unchanged_modified_typechanged() {
         assert_eq!(classify_change(Some(&file(1, 100)), None, 0), Created);
         assert_eq!(classify_change(None, Some(&file(1, 100)), 0), Deleted);
-        assert_eq!(classify_change(Some(&file(1, 100)), Some(&file(1, 100)), 0), Unchanged);
-        assert_eq!(classify_change(Some(&file(2, 100)), Some(&file(1, 100)), 0), Modified);
-        assert_eq!(classify_change(Some(&file(1, 999)), Some(&file(1, 100)), 0), Modified);
-        assert_eq!(classify_change(Some(&dir()), Some(&file(1, 100)), 0), TypeChanged);
-        assert_eq!(classify_change(Some(&file(1, 100)), Some(&dir()), 0), TypeChanged);
+        assert_eq!(
+            classify_change(Some(&file(1, 100)), Some(&file(1, 100)), 0),
+            Unchanged
+        );
+        assert_eq!(
+            classify_change(Some(&file(2, 100)), Some(&file(1, 100)), 0),
+            Modified
+        );
+        assert_eq!(
+            classify_change(Some(&file(1, 999)), Some(&file(1, 100)), 0),
+            Modified
+        );
+        assert_eq!(
+            classify_change(Some(&dir()), Some(&file(1, 100)), 0),
+            TypeChanged
+        );
+        assert_eq!(
+            classify_change(Some(&file(1, 100)), Some(&dir()), 0),
+            TypeChanged
+        );
     }
 
     #[test]
     fn classify_mtime_tolerance_absorbs_fs_granularity() {
         // Within 2s (exFAT) granularity, same size => Unchanged.
         let gran = 2_000_000_000i64;
-        assert_eq!(classify_change(Some(&file(10, 1_000_000_000)), Some(&file(10, 0)), gran), Unchanged);
+        assert_eq!(
+            classify_change(Some(&file(10, 1_000_000_000)), Some(&file(10, 0)), gran),
+            Unchanged
+        );
         // Beyond tolerance => Modified.
-        assert_eq!(classify_change(Some(&file(10, 3_000_000_000)), Some(&file(10, 0)), gran), Modified);
+        assert_eq!(
+            classify_change(Some(&file(10, 3_000_000_000)), Some(&file(10, 0)), gran),
+            Modified
+        );
     }
 
     #[test]
@@ -170,7 +215,9 @@ mod tests {
         reconcile(a, b, identical).action
     }
     fn conf(a: ChangeKind, b: ChangeKind) -> ConflictType {
-        reconcile(a, b, false).conflict.expect("expected a conflict")
+        reconcile(a, b, false)
+            .conflict
+            .expect("expected a conflict")
     }
 
     #[test]
@@ -201,7 +248,10 @@ mod tests {
     fn table_both_changed_same_way_conflict_when_differing() {
         assert_eq!(conf(Created, Created), ConflictType::CreateCreate);
         assert_eq!(conf(Modified, Modified), ConflictType::EditEdit);
-        assert_eq!(conf(TypeChanged, TypeChanged), ConflictType::TypeChangeTypeChange);
+        assert_eq!(
+            conf(TypeChanged, TypeChanged),
+            ConflictType::TypeChangeTypeChange
+        );
     }
 
     #[test]
@@ -220,9 +270,12 @@ mod tests {
         assert_eq!(conf(TypeChanged, Modified), ConflictType::ModifyTypeChange);
 
         for (a, b) in [
-            (Modified, Deleted), (Deleted, Modified),
-            (TypeChanged, Deleted), (Deleted, TypeChanged),
-            (Modified, TypeChanged), (TypeChanged, Modified),
+            (Modified, Deleted),
+            (Deleted, Modified),
+            (TypeChanged, Deleted),
+            (Deleted, TypeChanged),
+            (Modified, TypeChanged),
+            (TypeChanged, Modified),
         ] {
             let d = reconcile(a, b, false);
             assert!(d.is_conflict());
@@ -234,10 +287,17 @@ mod tests {
     #[test]
     fn table_impossible_cells_are_state_desync() {
         for (a, b) in [
-            (Created, Modified), (Created, Deleted), (Created, TypeChanged),
-            (Modified, Created), (Deleted, Created), (TypeChanged, Created),
+            (Created, Modified),
+            (Created, Deleted),
+            (Created, TypeChanged),
+            (Modified, Created),
+            (Deleted, Created),
+            (TypeChanged, Created),
         ] {
-            assert_eq!(reconcile(a, b, false).conflict, Some(ConflictType::StateDesync));
+            assert_eq!(
+                reconcile(a, b, false).conflict,
+                Some(ConflictType::StateDesync)
+            );
         }
     }
 
@@ -262,17 +322,116 @@ mod tests {
 
     #[test]
     fn defaults_preserve_data() {
-        assert_eq!(default_resolution(ConflictType::ModifyDelete), Resolution::KeepModified);
-        assert_eq!(default_resolution(ConflictType::EditEdit), Resolution::KeepBoth);
-        assert_eq!(default_resolution(ConflictType::DeleteTypeChange), Resolution::KeepTypeChanged);
-        assert_eq!(default_resolution(ConflictType::StateDesync), Resolution::Skip);
+        assert_eq!(
+            default_resolution(ConflictType::ModifyDelete),
+            Resolution::KeepModified
+        );
+        assert_eq!(
+            default_resolution(ConflictType::EditEdit),
+            Resolution::KeepBoth
+        );
+        assert_eq!(
+            default_resolution(ConflictType::DeleteTypeChange),
+            Resolution::KeepTypeChanged
+        );
+        assert_eq!(
+            default_resolution(ConflictType::StateDesync),
+            Resolution::Skip
+        );
         // The first offered option is always the default.
         for ct in [
-            ConflictType::EditEdit, ConflictType::CreateCreate, ConflictType::ModifyDelete,
-            ConflictType::DeleteTypeChange, ConflictType::ModifyTypeChange,
-            ConflictType::TypeChangeTypeChange, ConflictType::StateDesync,
+            ConflictType::EditEdit,
+            ConflictType::CreateCreate,
+            ConflictType::ModifyDelete,
+            ConflictType::DeleteTypeChange,
+            ConflictType::ModifyTypeChange,
+            ConflictType::TypeChangeTypeChange,
+            ConflictType::StateDesync,
         ] {
             assert_eq!(resolution_options(ct)[0], default_resolution(ct));
+        }
+    }
+
+    /// Golden snapshot of the ENTIRE reconcile truth table. This is the semantics
+    /// freeze that replaces the old "reconcile.rs must be byte-identical" rule:
+    /// the file may be reformatted freely, but ANY change to a cell's
+    /// (Action, ConflictType) here is an intentional, reviewable change to the
+    /// safety-critical table. Covers all 25 (a, b) cells at identical=false plus
+    /// the 3 "both changed identically" collapses at identical=true.
+    #[test]
+    fn golden_truth_table_is_frozen() {
+        use ConflictType::*;
+        // Action + ChangeKind variants are already in scope via the module imports.
+        let cases: &[(ChangeKind, ChangeKind, bool, Action, Option<ConflictType>)] = &[
+            (Unchanged, Unchanged, false, Noop, None),
+            (Unchanged, Created, false, CopyBtoA, None),
+            (Unchanged, Modified, false, CopyBtoA, None),
+            (Unchanged, TypeChanged, false, CopyBtoA, None),
+            (Unchanged, Deleted, false, DeleteA, None),
+            (Created, Unchanged, false, CopyAtoB, None),
+            (Modified, Unchanged, false, CopyAtoB, None),
+            (TypeChanged, Unchanged, false, CopyAtoB, None),
+            (Deleted, Unchanged, false, DeleteB, None),
+            (Created, Created, false, Conflict, Some(CreateCreate)),
+            (Modified, Modified, false, Conflict, Some(EditEdit)),
+            (
+                TypeChanged,
+                TypeChanged,
+                false,
+                Conflict,
+                Some(TypeChangeTypeChange),
+            ),
+            (Deleted, Deleted, false, UpdateBaselineOnly, None),
+            (Modified, Deleted, false, Conflict, Some(ModifyDelete)),
+            (Deleted, Modified, false, Conflict, Some(ModifyDelete)),
+            (
+                TypeChanged,
+                Deleted,
+                false,
+                Conflict,
+                Some(DeleteTypeChange),
+            ),
+            (
+                Deleted,
+                TypeChanged,
+                false,
+                Conflict,
+                Some(DeleteTypeChange),
+            ),
+            (
+                Modified,
+                TypeChanged,
+                false,
+                Conflict,
+                Some(ModifyTypeChange),
+            ),
+            (
+                TypeChanged,
+                Modified,
+                false,
+                Conflict,
+                Some(ModifyTypeChange),
+            ),
+            (Created, Modified, false, Conflict, Some(StateDesync)),
+            (Created, Deleted, false, Conflict, Some(StateDesync)),
+            (Created, TypeChanged, false, Conflict, Some(StateDesync)),
+            (Modified, Created, false, Conflict, Some(StateDesync)),
+            (Deleted, Created, false, Conflict, Some(StateDesync)),
+            (TypeChanged, Created, false, Conflict, Some(StateDesync)),
+            (Created, Created, true, UpdateBaselineOnly, None),
+            (Modified, Modified, true, UpdateBaselineOnly, None),
+            (TypeChanged, TypeChanged, true, UpdateBaselineOnly, None),
+        ];
+        for (a, b, identical, action, conflict) in cases {
+            let d = reconcile(*a, *b, *identical);
+            assert_eq!(
+                &d.action, action,
+                "action for ({a:?}, {b:?}, identical={identical})"
+            );
+            assert_eq!(
+                &d.conflict, conflict,
+                "conflict for ({a:?}, {b:?}, identical={identical})"
+            );
         }
     }
 }

@@ -5,9 +5,9 @@
 
 import { Plus, X } from "lucide-react";
 import type { IgnorePolicy } from "../../ipc/bindings";
-import { Toggle } from "../primitives/Toggle";
-import { Button } from "../primitives/Button";
 import s from "../job/job.module.css";
+import { Button } from "../primitives/Button";
+import { Toggle } from "../primitives/Toggle";
 
 interface Props {
   value: IgnorePolicy;
@@ -74,12 +74,7 @@ export function FilterEditor({ value, onChange, idPrefix = "filter" }: Props) {
             </div>
           ))}
           <div>
-            <Button
-              type="button"
-              small
-              onClick={addGlob}
-              icon={<Plus size={14} />}
-            >
+            <Button type="button" small onClick={addGlob} icon={<Plus size={14} />}>
               Add glob
             </Button>
           </div>

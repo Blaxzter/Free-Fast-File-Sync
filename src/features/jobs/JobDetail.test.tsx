@@ -9,8 +9,8 @@
  *
  * The per-row pair id comes from the PreviewJobResult wrapper, never PlanItem. */
 
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // @tanstack/react-virtual computes an empty viewport under jsdom (no real
 // layout), so the virtualized PlanGrid renders zero rows. Mock the virtualizer
@@ -27,7 +27,7 @@ vi.mock("@tanstack/react-virtual", () => ({
       })),
   }),
 }));
-import userEvent from "@testing-library/user-event";
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -36,17 +36,13 @@ import {
   createRouter,
   RouterProvider,
 } from "@tanstack/react-router";
-import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type {
-  PairPreview,
-  PlanItem,
-  PreviewJobResult,
-  SyncPlan,
-} from "../../ipc/bindings";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import userEvent from "@testing-library/user-event";
+import { subscribeRunEvents, useStore } from "../../app/store";
 import type { Job } from "../../domain/job";
 import { newJob } from "../../domain/job";
-import { subscribeRunEvents, useStore } from "../../app/store";
+import type { PairPreview, PlanItem, PreviewJobResult, SyncPlan } from "../../ipc/bindings";
 import { JobDetail } from "./JobDetail";
 
 const RUN_ID = "01RUN0000000000000000000A";
@@ -159,8 +155,28 @@ function installIpc() {
         return {
           run_id: RUN_ID,
           pairs: [
-            { pair_id: "PAIR_0", report: { done: 1, failed: 0, skipped: 0, conflicts: 0, bytes_copied: 1, outcomes: [] } },
-            { pair_id: "PAIR_1", report: { done: 1, failed: 0, skipped: 0, conflicts: 0, bytes_copied: 1, outcomes: [] } },
+            {
+              pair_id: "PAIR_0",
+              report: {
+                done: 1,
+                failed: 0,
+                skipped: 0,
+                conflicts: 0,
+                bytes_copied: 1,
+                outcomes: [],
+              },
+            },
+            {
+              pair_id: "PAIR_1",
+              report: {
+                done: 1,
+                failed: 0,
+                skipped: 0,
+                conflicts: 0,
+                bytes_copied: 1,
+                outcomes: [],
+              },
+            },
           ],
         };
       if (cmd === "cancel_run") return true;
@@ -210,9 +226,7 @@ describe("JobDetail", () => {
     await user.click(screen.getByRole("button", { name: /compare/i }));
 
     // One section per pair (data-pair-id wrapper on each PairSection).
-    await waitFor(() =>
-      expect(document.querySelectorAll("[data-pair-id]")).toHaveLength(2),
-    );
+    await waitFor(() => expect(document.querySelectorAll("[data-pair-id]")).toHaveLength(2));
     expect(document.querySelector('[data-pair-id="PAIR_0"]')).not.toBeNull();
     expect(document.querySelector('[data-pair-id="PAIR_1"]')).not.toBeNull();
   });
@@ -237,9 +251,7 @@ describe("JobDetail", () => {
     await screen.findByText("Two-pair job");
     await user.click(screen.getByRole("button", { name: /compare/i }));
 
-    await waitFor(() =>
-      expect(document.querySelectorAll("[data-pair-id]")).toHaveLength(2),
-    );
+    await waitFor(() => expect(document.querySelectorAll("[data-pair-id]")).toHaveLength(2));
 
     // Conflict is prefilled (KeepNewer) so the conflict gate is satisfied, but
     // PAIR_1 tripped the big-delete guard -> Apply still disabled.
@@ -337,9 +349,7 @@ describe("JobDetail", () => {
         path: "live.txt",
         action: "DeleteB",
       });
-      await waitFor(() =>
-        expect(useStore.getState().runs[RUN_ID]!.progress?.done).toBe(4),
-      );
+      await waitFor(() => expect(useStore.getState().runs[RUN_ID]!.progress?.done).toBe(4));
       const strip = await screen.findByLabelText("run progress");
       expect(strip).toHaveTextContent("live.txt");
       expect(strip).toHaveTextContent("Applying pair 2/2");

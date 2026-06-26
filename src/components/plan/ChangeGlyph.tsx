@@ -1,5 +1,5 @@
-import type { ChangeKind } from "../../domain/plan";
 import { CHANGE_MEANING } from "../../domain/meaning";
+import type { ChangeKind } from "../../domain/plan";
 import s from "./plan.module.css";
 
 /** Bare meaning glyph + 1ch label for an A/B change cell. */

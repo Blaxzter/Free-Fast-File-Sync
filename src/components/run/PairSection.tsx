@@ -8,14 +8,14 @@
  * The per-row pair id comes from the PreviewJobResult wrapper (this component's
  * `pairId` prop), never from a field on PlanItem. */
 
-import type { PairPreview, Resolution, SyncMode } from "../../ipc/bindings";
+import { DELETION_MEANING } from "../../domain/meaning";
 import { visibleItems } from "../../domain/plan";
+import type { PairPreview, Resolution, SyncMode } from "../../ipc/bindings";
 import { ModeBadge } from "../job/ModeBadge";
 import { BaselineBadge } from "../plan/BaselineBadge";
 import { BigDeleteGate } from "../plan/BigDeleteGate";
 import { PlanGrid } from "../plan/PlanGrid";
 import { Banner } from "../primitives/Banner";
-import { DELETION_MEANING } from "../../domain/meaning";
 import s from "./run.module.css";
 
 interface Props {
@@ -105,7 +105,11 @@ export function PairSection({
             {changes} changes
           </span>
           {conflicts > 0 && (
-            <span className={s.pairCount} data-kind="conflicts" style={{ color: "var(--conflict-fg)" }}>
+            <span
+              className={s.pairCount}
+              data-kind="conflicts"
+              style={{ color: "var(--conflict-fg)" }}
+            >
               {conflicts} conflicts
             </span>
           )}

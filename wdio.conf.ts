@@ -20,8 +20,8 @@
  *   pnpm e2e:native
  */
 
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,7 +99,9 @@ export const config: WebdriverIO.Config = {
       // `where`/`which` won't resolve an absolute path; just warn — WDIO will
       // surface the real launch error if it's genuinely missing.
       // eslint-disable-next-line no-console
-      console.warn(`[wdio] expecting built app at ${APP_BINARY} (run \`pnpm tauri build --debug\`)`);
+      console.warn(
+        `[wdio] expecting built app at ${APP_BINARY} (run \`pnpm tauri build --debug\`)`,
+      );
     }
   },
 
@@ -107,7 +109,9 @@ export const config: WebdriverIO.Config = {
     new Promise<void>((resolve, reject) => {
       const args = MSEDGEDRIVER ? ["--native-driver", MSEDGEDRIVER] : [];
       tauriDriver = spawn("tauri-driver", args, { stdio: [null, process.stdout, process.stderr] });
-      tauriDriver.on("error", (e) => reject(new Error(`failed to spawn tauri-driver: ${e.message}`)));
+      tauriDriver.on("error", (e) =>
+        reject(new Error(`failed to spawn tauri-driver: ${e.message}`)),
+      );
       // tauri-driver needs a moment to bind its port before the session opens.
       setTimeout(resolve, 2_000);
     }),

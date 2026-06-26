@@ -1,13 +1,13 @@
-import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRef } from "react";
+import { ACTION_MEANING } from "../../domain/meaning";
 import type { PlanItem, Resolution } from "../../domain/plan";
 import { actionClass, formatBytes } from "../../domain/plan";
-import { ACTION_MEANING } from "../../domain/meaning";
-import { ChangeGlyph } from "./ChangeGlyph";
 import { ActionBadge } from "./ActionBadge";
+import { ChangeGlyph } from "./ChangeGlyph";
 import { ConflictTag } from "./ConflictTag";
-import { ResolutionSelect } from "./ResolutionSelect";
 import s from "./plan.module.css";
+import { ResolutionSelect } from "./ResolutionSelect";
 
 interface Props {
   items: PlanItem[];
@@ -51,10 +51,7 @@ function PlanRow({
   const { parent, base } = splitPath(it.path);
   const isConflict = it.action === "Conflict";
   const isDesync = it.conflict === "StateDesync";
-  const rowCls = [
-    s.gridRow,
-    isDesync ? s.rowDanger : isConflict ? s.rowConflict : "",
-  ]
+  const rowCls = [s.gridRow, isDesync ? s.rowDanger : isConflict ? s.rowConflict : ""]
     .filter(Boolean)
     .join(" ");
   const m = ACTION_MEANING[it.action];
@@ -81,9 +78,7 @@ function PlanRow({
       <div>
         <ActionBadge action={it.action} />
       </div>
-      <span className={s.cellSize}>
-        {formatBytes(it.a?.size ?? it.b?.size ?? 0)}
-      </span>
+      <span className={s.cellSize}>{formatBytes(it.a?.size ?? it.b?.size ?? 0)}</span>
       <div className={s.cellResolve}>
         {isConflict && it.resolution_options.length > 0 && (
           <ResolutionSelect

@@ -17,7 +17,7 @@ defaults:
 
 jobs:
   # ── Fast feedback (the pre-commit-equivalent gate) ────────────────────────
-  # cargo test --lib + vitest + tsc --noEmit + cargo fmt --check + clippy.
+  # cargo test --lib + vitest + tsc --noEmit + cargo fmt --check + clippy + biome.
   # IMPORTANT: fmt runs with --check ONLY — it must never rewrite reconcile.rs
   # (or any source). A failing fmt is a hard error the author fixes locally.
   check:
@@ -68,6 +68,11 @@ jobs:
 
       - name: vitest (frontend unit/component)
         run: pnpm test
+
+      # Biome format + organize-imports gate (--check, never rewrites in CI).
+      # The tree is canonical, so this is a no-op unless someone skipped `pnpm format`.
+      - name: biome check (format + organize-imports)
+        run: pnpm format:check
 
   # ── Per-PR: full Rust test suite + Tier-1 Playwright (mocked IPC) ─────────
   # Tier-1 needs only `pnpm build:e2e` + a static preview server + headless

@@ -1,7 +1,7 @@
 import type { ApplyReport } from "../../domain/plan";
-import { Chip } from "../primitives/Chip";
-import { Banner } from "../primitives/Banner";
 import { formatBytes } from "../../domain/plan";
+import { Banner } from "../primitives/Banner";
+import { Chip } from "../primitives/Chip";
 
 /** Renders an ApplyReport: meaning-colored summary chips + a failure banner. */
 export function RunReport({ report }: { report: ApplyReport }) {

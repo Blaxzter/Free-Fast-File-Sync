@@ -3,18 +3,18 @@
  * built render a proper "Coming soon" empty state, never a blank screen. */
 
 import {
+  createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
-  createMemoryHistory,
   redirect,
 } from "@tanstack/react-router";
 import { AppShell } from "../components/shell/AppShell";
 import { ComingSoon } from "../features/ComingSoon";
-import { JobsList } from "../features/jobs/JobsList";
-import { JobEditor } from "../features/jobs/JobEditor";
-import { JobDetail } from "../features/jobs/JobDetail";
 import { CompareWorkspace } from "../features/jobs/CompareWorkspace";
+import { JobDetail } from "../features/jobs/JobDetail";
+import { JobEditor } from "../features/jobs/JobEditor";
+import { JobsList } from "../features/jobs/JobsList";
 import { SettingsGeneral } from "../features/settings/SettingsGeneral";
 import { SettingsImport } from "../features/settings/SettingsImport";
 

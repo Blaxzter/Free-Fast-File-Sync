@@ -95,7 +95,10 @@ interface UiState {
 
   /** Command-driven: a preview/apply for `runId` is now the active run. Seeds a
    * mirror so the very first progress event has a home, and marks the phase. */
-  beginRun: (runId: string, opts?: { jobId?: string; pairCount?: number; phase?: EnginePhase }) => void;
+  beginRun: (
+    runId: string,
+    opts?: { jobId?: string; pairCount?: number; phase?: EnginePhase },
+  ) => void;
   /** Event-driven mutators (the run subscriber calls these; each ignores events
    * for a non-active run). */
   applyRunStarted: (e: { run_id: string; job_id: string; pair_count: number }) => void;
@@ -154,8 +157,7 @@ export const useStore = create<UiState>((set) => {
         return { runs, activeRunId: e.run_id, run: viewOf(runs, e.run_id) };
       }),
 
-    applyRunScan: (e) =>
-      mutateActive(e.run_id, (m) => ({ ...m })),
+    applyRunScan: (e) => mutateActive(e.run_id, (m) => ({ ...m })),
 
     applyRunProgress: (p) =>
       mutateActive(p.run_id, (m) => ({

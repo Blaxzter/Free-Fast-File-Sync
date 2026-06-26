@@ -8,38 +8,23 @@
  * Apply is blocked until EVERY conflict across ALL pairs is resolved AND every
  * pair whose plan tripped the big-delete guard is confirmed. */
 
+import { Check, Play, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Play, Check, X } from "lucide-react";
-import type {
-  PairPreview,
-  PreviewJobResult,
-  Resolution,
-} from "../../ipc/bindings";
-import type { PlanSummary } from "../../domain/plan";
-import {
-  defaultResolutions,
-  unresolvedConflicts,
-} from "../../domain/plan";
-import type { Job } from "../../domain/job";
-import {
-  directionMode,
-  effectiveDeletion,
-  effectiveDirection,
-} from "../../domain/job";
-import { useJob } from "../../ipc/queries";
-import {
-  cancelRun as cancelRunCmd,
-  useExecuteJob,
-  usePreviewJob,
-} from "../../ipc/mutations";
 import { useStore } from "../../app/store";
-import { Button } from "../../components/primitives/Button";
-import { Banner } from "../../components/primitives/Banner";
 import { SummaryChips } from "../../components/plan/SummaryChips";
+import { Banner } from "../../components/primitives/Banner";
+import { Button } from "../../components/primitives/Button";
 import { PairSection } from "../../components/run/PairSection";
 import { RunReport } from "../../components/run/RunReport";
-import compare from "./compare.module.css";
 import run from "../../components/run/run.module.css";
+import type { Job } from "../../domain/job";
+import { directionMode, effectiveDeletion, effectiveDirection } from "../../domain/job";
+import type { PlanSummary } from "../../domain/plan";
+import { defaultResolutions, unresolvedConflicts } from "../../domain/plan";
+import type { PairPreview, PreviewJobResult, Resolution } from "../../ipc/bindings";
+import { cancelRun as cancelRunCmd, useExecuteJob, usePreviewJob } from "../../ipc/mutations";
+import { useJob } from "../../ipc/queries";
+import compare from "./compare.module.css";
 
 const EMPTY_SUMMARY: PlanSummary = {
   total: 0,
@@ -55,20 +40,23 @@ const EMPTY_SUMMARY: PlanSummary = {
 
 /** Sum every pair's PlanSummary into one aggregate for the top chips. */
 function aggregateSummary(pairs: PairPreview[]): PlanSummary {
-  return pairs.reduce<PlanSummary>((acc, p) => {
-    const s = p.plan.summary;
-    return {
-      total: acc.total + s.total,
-      copy_a_to_b: acc.copy_a_to_b + s.copy_a_to_b,
-      copy_b_to_a: acc.copy_b_to_a + s.copy_b_to_a,
-      delete_a: acc.delete_a + s.delete_a,
-      delete_b: acc.delete_b + s.delete_b,
-      conflicts: acc.conflicts + s.conflicts,
-      baseline_only: acc.baseline_only + s.baseline_only,
-      noop: acc.noop + s.noop,
-      skipped: acc.skipped + s.skipped,
-    };
-  }, { ...EMPTY_SUMMARY });
+  return pairs.reduce<PlanSummary>(
+    (acc, p) => {
+      const s = p.plan.summary;
+      return {
+        total: acc.total + s.total,
+        copy_a_to_b: acc.copy_a_to_b + s.copy_a_to_b,
+        copy_b_to_a: acc.copy_b_to_a + s.copy_b_to_a,
+        delete_a: acc.delete_a + s.delete_a,
+        delete_b: acc.delete_b + s.delete_b,
+        conflicts: acc.conflicts + s.conflicts,
+        baseline_only: acc.baseline_only + s.baseline_only,
+        noop: acc.noop + s.noop,
+        skipped: acc.skipped + s.skipped,
+      };
+    },
+    { ...EMPTY_SUMMARY },
+  );
 }
 
 /** Build the initial resolution map for every pair, prefilling each conflict
@@ -99,7 +87,14 @@ export function JobDetail({ jobId }: { jobId: string }) {
 
   // Per-pair header metadata (engine-axis mode + deletion) resolved from the Job.
   const pairMeta = useMemo(() => {
-    const map: Record<string, { mode: ReturnType<typeof directionMode>; deletion: "RecycleBin" | "Permanent"; label: string }> = {};
+    const map: Record<
+      string,
+      {
+        mode: ReturnType<typeof directionMode>;
+        deletion: "RecycleBin" | "Permanent";
+        label: string;
+      }
+    > = {};
     if (!job) return map;
     for (const fp of job.pairs) {
       map[fp.id] = {
@@ -116,11 +111,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
   // Apply gating: no unresolved conflicts anywhere, and every tripped
   // big-delete pair confirmed.
   const totalUnresolved = useMemo(
-    () =>
-      pairs.reduce(
-        (n, p) => n + unresolvedConflicts(p.plan, resolutions[p.pair_id] ?? {}),
-        0,
-      ),
+    () => pairs.reduce((n, p) => n + unresolvedConflicts(p.plan, resolutions[p.pair_id] ?? {}), 0),
     [pairs, resolutions],
   );
   const unconfirmedBigDelete = useMemo(
@@ -249,8 +240,8 @@ export function JobDetail({ jobId }: { jobId: string }) {
 
       {unconfirmedBigDelete.length > 0 && (
         <Banner intent="warn">
-          {unconfirmedBigDelete.length} pair(s) tripped the large-deletion guard —
-          confirm each below before applying.
+          {unconfirmedBigDelete.length} pair(s) tripped the large-deletion guard — confirm each
+          below before applying.
         </Banner>
       )}
 
@@ -265,7 +256,10 @@ export function JobDetail({ jobId }: { jobId: string }) {
           const meta = pairMeta[p.pair_id];
           const rep = reports[p.pair_id];
           return (
-            <div key={p.pair_id} style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+            <div
+              key={p.pair_id}
+              style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}
+            >
               <PairSection
                 pair={p}
                 pairId={p.pair_id}
@@ -289,7 +283,6 @@ export function JobDetail({ jobId }: { jobId: string }) {
           );
         })}
       </div>
-
     </div>
   );
 }

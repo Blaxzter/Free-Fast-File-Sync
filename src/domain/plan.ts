@@ -2,12 +2,7 @@
  * No React, no IPC. Harvested from the throwaway src/App.tsx (rank, conflict
  * default-resolution prefill, byte formatting). */
 
-import type {
-  Action,
-  PlanItem,
-  Resolution,
-  SyncPlan,
-} from "../ipc/bindings";
+import type { Action, PlanItem, Resolution, SyncPlan } from "../ipc/bindings";
 
 export type {
   Action,
@@ -73,9 +68,7 @@ export function unresolvedConflicts(
  * Excludes `UpdateBaselineOnly` — those advance the baseline with zero IO — so
  * the `Apply (N)` label reflects actual data movement. */
 export function actionableCount(plan: SyncPlan): number {
-  return (
-    plan.summary.total - plan.summary.noop - plan.summary.baseline_only
-  );
+  return plan.summary.total - plan.summary.noop - plan.summary.baseline_only;
 }
 
 /** Number of items Apply will touch at all, including zero-IO baseline-only

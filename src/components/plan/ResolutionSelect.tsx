@@ -1,5 +1,5 @@
-import type { Resolution } from "../../domain/plan";
 import { RESOLUTION_LABEL } from "../../domain/meaning";
+import type { Resolution } from "../../domain/plan";
 import s from "../primitives/primitives.module.css";
 
 interface Props {

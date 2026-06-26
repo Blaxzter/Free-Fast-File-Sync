@@ -66,8 +66,8 @@ pub fn extended(p: &Path) -> PathBuf {
 #[cfg(windows)]
 pub fn validate_representable(key: &str) -> Result<()> {
     const RESERVED: &[&str] = &[
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     for seg in key.split('/') {
         if seg.is_empty() {
@@ -79,7 +79,10 @@ pub fn validate_representable(key: &str) -> Result<()> {
                 reason: format!("segment '{seg}' has a trailing space or dot"),
             });
         }
-        if let Some(bad) = seg.chars().find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*')) {
+        if let Some(bad) = seg
+            .chars()
+            .find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+        {
             return Err(SyncError::NotRepresentable {
                 path: key.to_string(),
                 reason: format!("segment '{seg}' contains illegal character '{bad}'"),
