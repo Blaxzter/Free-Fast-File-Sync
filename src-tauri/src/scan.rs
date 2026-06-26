@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::fs::Metadata;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
@@ -39,6 +40,17 @@ impl ScanResult {
 /// Walk one root into a key→Meta map. Hashes are only computed when `hash_files`
 /// (verify-by-hash mode); otherwise change detection is metadata-based.
 pub fn scan_root(root: &Path, policy: &IgnorePolicy, hash_files: bool) -> Result<ScanResult> {
+    scan_root_counted(root, policy, hash_files, &AtomicU64::new(0))
+}
+
+/// Like [`scan_root`], but bumps `scanned` once per recorded entry so a caller on
+/// another thread can poll live scan progress (e.g. to emit a progress event).
+pub fn scan_root_counted(
+    root: &Path,
+    policy: &IgnorePolicy,
+    hash_files: bool,
+    scanned: &AtomicU64,
+) -> Result<ScanResult> {
     if !root.is_dir() {
         return Err(SyncError::InvalidJob(format!(
             "root is not a directory: {}",
@@ -162,6 +174,7 @@ pub fn scan_root(root: &Path, policy: &IgnorePolicy, hash_files: bool) -> Result
                     hash,
                 },
             );
+            scanned.fetch_add(1, Ordering::Relaxed);
             WalkState::Continue
         })
     });
@@ -283,5 +296,21 @@ mod tests {
         let h2 = hash_file(&p).unwrap();
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 64); // blake3 = 32 bytes hex
+    }
+
+    #[test]
+    fn counter_matches_recorded_entry_count() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), "1").unwrap();
+        fs::write(root.join("b.txt"), "2").unwrap();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("c.txt"), "3").unwrap();
+
+        let scanned = AtomicU64::new(0);
+        let res = scan_root_counted(root, &IgnorePolicy::default(), false, &scanned).unwrap();
+        // Every recorded entry (files + the dir) bumps the counter exactly once.
+        assert_eq!(scanned.load(Ordering::Relaxed) as usize, res.entries.len());
+        assert!(res.entries.len() >= 4);
     }
 }

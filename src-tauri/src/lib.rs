@@ -32,7 +32,9 @@ use runs::{RunDescriptor, RunError, RunRegistry};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, Manager, State};
 
 struct AppState {
@@ -175,6 +177,12 @@ struct RunFinished {
     run_id: String,
 }
 
+#[derive(Clone, Serialize)]
+struct RunScanProgress {
+    run_id: String,
+    scanned: u64,
+}
+
 /// Resolve the enabled pairs for `job`, optionally filtered to `pair_ids`, in job
 /// order. A `Some(pair_ids)` filter keeps only those ids (and only if enabled).
 fn select_pairs(job: &Job, pair_ids: &Option<Vec<String>>) -> Vec<job::ResolvedPair> {
@@ -230,33 +238,72 @@ async fn preview_job(
     let run_id_task = run_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let store = store::Store::new(store_dir);
-        let mut pairs = Vec::with_capacity(resolved.len());
-        for r in &resolved {
-            let _ = app_for_task.emit(
-                "run://scan",
-                RunScan {
-                    run_id: run_id_task.clone(),
+        // Live scan progress: a shared counter the parallel walk bumps per entry,
+        // polled by a ticker thread that emits run://scan-progress (~8/sec). The
+        // count is cumulative across the job's pairs.
+        let scanned = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let ticker = {
+            let app = app_for_task.clone();
+            let run_id = run_id_task.clone();
+            let scanned = scanned.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_millis(120));
+                    let _ = app.emit(
+                        "run://scan-progress",
+                        RunScanProgress {
+                            run_id: run_id.clone(),
+                            scanned: scanned.load(Ordering::Relaxed),
+                        },
+                    );
+                }
+            })
+        };
+
+        // Wrapped so an early `?` still stops the ticker + emits the final count.
+        let pairs = (|| -> std::result::Result<Vec<PairPreview>, SyncError> {
+            let mut pairs = Vec::with_capacity(resolved.len());
+            for r in &resolved {
+                let _ = app_for_task.emit(
+                    "run://scan",
+                    RunScan {
+                        run_id: run_id_task.clone(),
+                        pair_id: r.pair_id.clone(),
+                        phase: "Scanning".into(),
+                    },
+                );
+                let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
+                let status = engine::baseline_status(&bpath);
+                let plan = engine::preview_counted(&r.config, &bpath, &scanned)?;
+                pairs.push(PairPreview {
                     pair_id: r.pair_id.clone(),
-                    phase: "Scanning".into(),
-                },
-            );
-            let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
-            let status = engine::baseline_status(&bpath);
-            let plan = engine::preview(&r.config, &bpath)?;
-            pairs.push(PairPreview {
-                pair_id: r.pair_id.clone(),
-                plan,
-                baseline_status: status,
-            });
-            let _ = app_for_task.emit(
-                "run://pair-done",
-                RunPairDone {
-                    run_id: run_id_task.clone(),
-                    pair_id: r.pair_id.clone(),
-                },
-            );
-        }
-        Ok::<_, SyncError>(pairs)
+                    plan,
+                    baseline_status: status,
+                });
+                let _ = app_for_task.emit(
+                    "run://pair-done",
+                    RunPairDone {
+                        run_id: run_id_task.clone(),
+                        pair_id: r.pair_id.clone(),
+                    },
+                );
+            }
+            Ok(pairs)
+        })();
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = ticker.join();
+        // One final exact count once the walk has settled.
+        let _ = app_for_task.emit(
+            "run://scan-progress",
+            RunScanProgress {
+                run_id: run_id_task.clone(),
+                scanned: scanned.load(Ordering::Relaxed),
+            },
+        );
+        pairs
     })
     .await
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));

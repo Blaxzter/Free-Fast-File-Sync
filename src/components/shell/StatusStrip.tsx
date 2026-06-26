@@ -7,6 +7,30 @@ import s from "./shell.module.css";
 export function StatusStrip() {
   const phase = useStore((st) => st.run.phase);
   const progress = useStore((st) => st.run.progress);
+  const scanned = useStore((st) => st.run.scanned);
+  const startedAt = useStore((st) => st.run.startedAt);
+
+  if (phase === "scanning") {
+    // Indeterminate (no known total mid-scan); show the live count + throughput.
+    const secs = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+    const rate = secs > 0.3 && scanned > 0 ? Math.round(scanned / secs) : 0;
+    return (
+      <footer className={s.statusStrip}>
+        <span className={s.statusItem}>
+          <StatusDot color="--watch-fg" live />
+          SCANNING
+        </span>
+        <div className={s.progressIndet}>
+          <div className={s.progressIndetBar} />
+        </div>
+        <span className={s.statusMono}>
+          {scanned.toLocaleString()} items
+          {secs >= 0.1 ? ` · ${secs.toFixed(1)}s` : ""}
+          {rate > 0 ? ` · ${rate.toLocaleString()}/s` : ""}
+        </span>
+      </footer>
+    );
+  }
 
   if (phase === "applying" && progress) {
     const pct = progress.total ? (progress.done / progress.total) * 100 : 0;
@@ -26,9 +50,9 @@ export function StatusStrip() {
     );
   }
 
-  const dotColor =
-    phase === "scanning" ? "--watch-fg" : phase === "applying" ? "--accent" : "--neutral-fg";
-  const label = phase === "scanning" ? "scanning" : phase === "applying" ? "applying" : "idle";
+  // The scanning phase returned above; only idle / applying-without-progress remain.
+  const dotColor = phase === "applying" ? "--accent" : "--neutral-fg";
+  const label = phase === "applying" ? "applying" : "idle";
 
   return (
     <footer className={s.statusStrip}>

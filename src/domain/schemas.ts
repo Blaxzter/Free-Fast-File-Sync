@@ -239,6 +239,11 @@ export const zRunFinished = z.object({
   run_id: z.string(),
 });
 
+export const zRunScanProgress = z.object({
+  run_id: z.string(),
+  scanned: z.number(),
+});
+
 // ---- ffs_import.rs ----
 
 export const zImportedJob = z.object({

@@ -13,12 +13,13 @@
  * latest progress), so existing consumers keep working unchanged. */
 
 import { create } from "zustand";
-import type { ApplyReport, Job, RunProgress } from "../ipc/bindings";
+import type { ApplyReport, Job, RunProgress, RunScanProgress } from "../ipc/bindings";
 import {
   onRunFinished,
   onRunPairDone,
   onRunProgress,
   onRunScan,
+  onRunScanProgress,
   onRunStarted,
 } from "../ipc/events";
 
@@ -32,6 +33,10 @@ export interface RunMirror {
   phase: EnginePhase;
   pairCount: number;
   activePairIndex: number;
+  /** Live cumulative count of entries recorded during the scan phase. */
+  scanned: number;
+  /** Epoch ms when the run started (for elapsed time + throughput). */
+  startedAt: number;
   /** Latest progress event per pair_id (per-pair progress strip). */
   progressByPair: Record<string, RunProgress>;
   /** Final apply report per pair_id (filled on pair-done during an apply). */
@@ -47,6 +52,9 @@ export interface RunView {
   runId: string | null;
   progress: RunProgress | null;
   report: ApplyReport | null;
+  /** Live scan count + start time of the active run (idle → 0 / null). */
+  scanned: number;
+  startedAt: number | null;
 }
 
 const idleView: RunView = {
@@ -54,6 +62,8 @@ const idleView: RunView = {
   runId: null,
   progress: null,
   report: null,
+  scanned: 0,
+  startedAt: null,
 };
 
 function newMirror(runId: string, jobId: string | null, pairCount: number): RunMirror {
@@ -63,6 +73,8 @@ function newMirror(runId: string, jobId: string | null, pairCount: number): RunM
     phase: "scanning",
     pairCount,
     activePairIndex: 0,
+    scanned: 0,
+    startedAt: Date.now(),
     progressByPair: {},
     reportByPair: {},
     progress: null,
@@ -74,7 +86,14 @@ function viewOf(runs: Record<string, RunMirror>, activeRunId: string | null): Ru
   if (!activeRunId) return idleView;
   const m = runs[activeRunId];
   if (!m) return idleView;
-  return { phase: m.phase, runId: m.runId, progress: m.progress, report: null };
+  return {
+    phase: m.phase,
+    runId: m.runId,
+    progress: m.progress,
+    report: null,
+    scanned: m.scanned,
+    startedAt: m.startedAt,
+  };
 }
 
 interface UiState {
@@ -109,6 +128,7 @@ interface UiState {
    * for a non-active run). */
   applyRunStarted: (e: { run_id: string; job_id: string; pair_count: number }) => void;
   applyRunScan: (e: { run_id: string; pair_id: string; phase: string }) => void;
+  applyRunScanProgress: (e: RunScanProgress) => void;
   applyRunProgress: (p: RunProgress) => void;
   applyRunPairDone: (e: { run_id: string; pair_id: string }) => void;
   applyRunFinished: (e: { run_id: string }) => void;
@@ -167,6 +187,8 @@ export const useStore = create<UiState>((set) => {
 
     applyRunScan: (e) => mutateActive(e.run_id, (m) => ({ ...m })),
 
+    applyRunScanProgress: (e) => mutateActive(e.run_id, (m) => ({ ...m, scanned: e.scanned })),
+
     applyRunProgress: (p) =>
       mutateActive(p.run_id, (m) => ({
         ...m,
@@ -205,6 +227,7 @@ export async function subscribeRunEvents(): Promise<() => void> {
   const unlistens = await Promise.all([
     onRunStarted((e) => st().applyRunStarted(e)),
     onRunScan((e) => st().applyRunScan(e)),
+    onRunScanProgress((e) => st().applyRunScanProgress(e)),
     onRunProgress((p) => st().applyRunProgress(p)),
     onRunPairDone((e) => st().applyRunPairDone(e)),
     onRunFinished((e) => st().applyRunFinished(e)),

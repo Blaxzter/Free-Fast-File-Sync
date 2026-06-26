@@ -10,10 +10,10 @@ use crate::error::{Result, SyncError};
 use crate::fsops;
 use crate::model::*;
 use crate::plan::{build_plan, PlanInputs};
-use crate::scan::scan_root;
+use crate::scan::scan_root_counted;
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 
 /// mtime comparison tolerance. 10ms absorbs serialization jitter without masking
 /// a genuine edit (which essentially always also changes size). Cross-filesystem
@@ -61,19 +61,25 @@ pub fn validate_job(cfg: &JobConfig) -> Result<()> {
     Ok(())
 }
 
-/// Scans both roots in parallel. The returned bool is `true` when EITHER scan
-/// hit read errors — in that case deletions must be suppressed this run.
-fn scan_both(
-    cfg: &JobConfig,
-) -> Result<(
+type ScanBoth = (
     crate::scan::ScanResult,
     crate::scan::ScanResult,
     Vec<String>,
     bool,
-)> {
+);
+
+/// Scans both roots in parallel. The returned bool is `true` when EITHER scan
+/// hit read errors — in that case deletions must be suppressed this run.
+fn scan_both(cfg: &JobConfig) -> Result<ScanBoth> {
+    scan_both_counted(cfg, &AtomicU64::new(0))
+}
+
+/// Like [`scan_both`], but threads a `scanned` counter into both root walks so a
+/// caller can poll live progress across the whole preview.
+fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
     let (ra, rb) = rayon::join(
-        || scan_root(&cfg.root_a, &cfg.ignore, cfg.verify_by_hash),
-        || scan_root(&cfg.root_b, &cfg.ignore, cfg.verify_by_hash),
+        || scan_root_counted(&cfg.root_a, &cfg.ignore, cfg.verify_by_hash, scanned),
+        || scan_root_counted(&cfg.root_b, &cfg.ignore, cfg.verify_by_hash, scanned),
     );
     let ra = ra?;
     let rb = rb?;
@@ -112,9 +118,19 @@ fn display_key(k: &str) -> &str {
 }
 
 pub fn preview(cfg: &JobConfig, baseline_path: &Path) -> Result<SyncPlan> {
+    preview_counted(cfg, baseline_path, &AtomicU64::new(0))
+}
+
+/// Like [`preview`], but threads a `scanned` counter through the scan so the
+/// Tauri layer can emit live scan-progress events while this runs.
+pub fn preview_counted(
+    cfg: &JobConfig,
+    baseline_path: &Path,
+    scanned: &AtomicU64,
+) -> Result<SyncPlan> {
     validate_job(cfg)?;
     let (base, status) = load_baseline(baseline_path);
-    let (ra, rb, warnings, scan_error) = scan_both(cfg)?;
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
     Ok(build_plan(PlanInputs {
         cfg,
         a: &ra.entries,

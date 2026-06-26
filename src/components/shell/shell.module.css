@@ -205,3 +205,30 @@
   background: linear-gradient(90deg, var(--accent-press), var(--accent));
   transition: width var(--dur) var(--ease);
 }
+
+/* Indeterminate sweep for the scan phase (no known total until it finishes). */
+.progressIndet {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+.progressIndetBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 32%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(90deg, transparent, var(--watch-fg), transparent);
+  animation: scanSweep 1.1s ease-in-out infinite;
+}
+@keyframes scanSweep {
+  0% {
+    left: -34%;
+  }
+  100% {
+    left: 100%;
+  }
+}

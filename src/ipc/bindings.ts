@@ -248,6 +248,12 @@ export interface RunFinished {
   run_id: string;
 }
 
+export interface RunScanProgress {
+  run_id: string;
+  /** Cumulative entries recorded across the job's pairs so far this scan. */
+  scanned: number;
+}
+
 // ---- ffs_import.rs ----
 
 export interface ImportedJob {
