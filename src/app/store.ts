@@ -13,7 +13,7 @@
  * latest progress), so existing consumers keep working unchanged. */
 
 import { create } from "zustand";
-import type { ApplyReport, RunProgress } from "../ipc/bindings";
+import type { ApplyReport, Job, RunProgress } from "../ipc/bindings";
 import {
   onRunFinished,
   onRunPairDone,
@@ -82,6 +82,10 @@ interface UiState {
   commandPaletteOpen: boolean;
   density: "compact" | "cozy";
 
+  /** A built-but-unsaved Job handed to the editor to prefill from (e.g. an FFS
+   * import). The editor consumes it once on mount, then clears it. */
+  jobDraft: Job | null;
+
   /** Every run we have a mirror for, keyed by run id. */
   runs: Record<string, RunMirror>;
   /** The run whose events we accept; others are dropped. */
@@ -92,6 +96,8 @@ interface UiState {
   toggleSidebar: () => void;
   setCommandPaletteOpen: (open: boolean) => void;
   setDensity: (d: "compact" | "cozy") => void;
+  /** Stash a Job for the editor to prefill from (or clear with null). */
+  setJobDraft: (job: Job | null) => void;
 
   /** Command-driven: a preview/apply for `runId` is now the active run. Seeds a
    * mirror so the very first progress event has a home, and marks the phase. */
@@ -126,6 +132,7 @@ export const useStore = create<UiState>((set) => {
     sidebarCollapsed: false,
     commandPaletteOpen: false,
     density: "compact",
+    jobDraft: null,
 
     runs: {},
     activeRunId: null,
@@ -134,6 +141,7 @@ export const useStore = create<UiState>((set) => {
     toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
     setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
     setDensity: (d) => set({ density: d }),
+    setJobDraft: (job) => set({ jobDraft: job }),
 
     beginRun: (runId, opts) =>
       set((st) => {

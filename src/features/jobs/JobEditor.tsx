@@ -12,6 +12,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
+import { useStore } from "../../app/store";
 import { FilterEditor } from "../../components/filter/FilterEditor";
 import s from "../../components/job/job.module.css";
 import { PairList } from "../../components/job/PairList";
@@ -48,6 +49,8 @@ export function JobEditor({ jobId }: Props) {
   const navigate = useNavigate();
   const saveJob = useSaveJob();
   const existing = useJob(jobId);
+  const jobDraft = useStore((st) => st.jobDraft);
+  const setJobDraft = useStore((st) => st.setJobDraft);
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<Job>({
@@ -60,6 +63,14 @@ export function JobEditor({ jobId }: Props) {
   useEffect(() => {
     if (jobId && existing.data) reset(existing.data);
   }, [jobId, existing.data, reset]);
+
+  // Prefill a NEW job from a stashed draft (e.g. an FFS import), exactly once.
+  useEffect(() => {
+    if (!jobId && jobDraft) {
+      reset(jobDraft);
+      setJobDraft(null);
+    }
+  }, [jobId, jobDraft, reset, setJobDraft]);
 
   const direction = watch("settings.direction");
   const oneWay = direction !== "TwoWay";

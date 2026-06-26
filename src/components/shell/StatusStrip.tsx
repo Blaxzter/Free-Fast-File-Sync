@@ -39,7 +39,6 @@ export function StatusStrip() {
       <span className={s.statusItem}>0 watchers</span>
       <span className={s.statusItem}>no schedule</span>
       <span className={s.statusGrow} />
-      <span className={s.statusItem}>single-pair · Phase 0</span>
     </footer>
   );
 }

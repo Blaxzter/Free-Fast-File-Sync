@@ -1,8 +1,11 @@
+import { useNavigate } from "@tanstack/react-router";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FileDown } from "lucide-react";
+import { ArrowRight, FileDown } from "lucide-react";
 import { useState } from "react";
+import { useStore } from "../../app/store";
 import { Banner } from "../../components/primitives/Banner";
 import { Button } from "../../components/primitives/Button";
+import { jobFromFfsImport } from "../../domain/ffsImport";
 import type { FfsImport } from "../../ipc/bindings";
 import { importFfs } from "../../ipc/commands";
 import { errorMessage } from "../../ipc/errors";
@@ -14,6 +17,15 @@ import s from "./settings.module.css";
 export function SettingsImport() {
   const [result, setResult] = useState<FfsImport | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const setJobDraft = useStore((st) => st.setJobDraft);
+
+  /** Map the parsed pairs into one unsaved Job and open the editor to review. */
+  function createJobFromImport() {
+    if (!result || result.jobs.length === 0) return;
+    setJobDraft(jobFromFfsImport(result));
+    void navigate({ to: "/jobs/new" });
+  }
 
   async function doImport() {
     setError(null);
@@ -34,8 +46,9 @@ export function SettingsImport() {
       <div className={s.section}>
         <span className={s.sectionTitle}>Import from FreeFileSync</span>
         <span className={s.sectionDesc}>
-          Pick a <code>.ffs_batch</code> or <code>.ffs_gui</code> config to parse its folder pairs.
-          A full "Create Job from these pairs" wizard lands in a later phase.
+          Pick a <code>.ffs_batch</code> or <code>.ffs_gui</code> config to parse its folder pairs,
+          then create a Job from them. <code>.gitignore</code> stays on, so the imported excludes
+          layer on top of it.
         </span>
         <div>
           <Button variant="primary" icon={<FileDown size={14} />} onClick={doImport}>
@@ -71,6 +84,15 @@ export function SettingsImport() {
                   </div>
                 </div>
               ))}
+            </div>
+            <div>
+              <Button
+                variant="primary"
+                icon={<ArrowRight size={14} />}
+                onClick={createJobFromImport}
+              >
+                Create job from {result.jobs.length} pair{result.jobs.length === 1 ? "" : "s"}
+              </Button>
             </div>
             {result.notes.length > 0 && (
               <details className={s.notes}>
