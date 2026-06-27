@@ -407,13 +407,26 @@ fn execute_rescans_fresh_suppress_deletes() {
     .unwrap();
 
     let suppressed = b.path().join("keep.txt").exists();
+    // The assertion only holds if the OS actually enforced the read-deny so the
+    // re-scan inside execute() errored. On the admin GitHub runner (runneradmin)
+    // the /deny ACE is bypassed, the scan sees no error, and the delete is NOT
+    // suppressed. Probe whether the deny bit; if not, skip — same guard the
+    // sibling one_pair_scan_error_* test already uses for elevated contexts.
+    let deny_effective = fs::read_dir(&denied).is_err();
     restore_read(&denied);
 
-    assert!(
-        suppressed,
-        "execute must RE-SCAN: a scan error introduced after preview suppresses the delete \
-         (no frozen-plan apply)"
-    );
+    if deny_effective {
+        assert!(
+            suppressed,
+            "execute must RE-SCAN: a scan error introduced after preview suppresses the delete \
+             (no frozen-plan apply)"
+        );
+    } else {
+        eprintln!(
+            "note: could not induce a scan error (elevated/CI runner); \
+             skipping the re-scan suppress-delete assertion"
+        );
+    }
 }
 
 /// The single-slot gate: while a run for job J holds the slot (as an apply
