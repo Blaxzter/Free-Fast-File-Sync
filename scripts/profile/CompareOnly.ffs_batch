@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Compare-ONLY FreeFileSync batch for benchmarking enumeration/compare time.
+
+  FreeFileSync has NO compare-only CLI mode: a batch always runs compare() then
+  synchronize(). The trick here is to set EVERY sync direction to "none", so
+  compare() does the full enumeration of both roots and synchronize() is a no-op.
+  The reported time is then ~= compare/scan time.
+
+  IMPORTANT: FFS's exact XmlFormat and tag names drift between versions. The robust
+  way to get a CORRECT 14.9 file is to build it in the GUI:
+    1. Set the Left/Right folders.
+    2. Comparison variant = "File time and size".
+    3. Synchronization variant = "Custom", then click every direction arrow until
+       all six (left-only / right-only / left-newer / right-newer / different /
+       conflict) are set to DO NOTHING (greyed).
+    4. File -> Save as batch job...  -> reuse that .ffs_batch.
+  Then just confirm all six directions are "none". This file is the shape to aim
+  for; let the GUI emit the canonical XML for your installed version.
+
+  Replace the two folder paths below.
+-->
+<FreeFileSync XmlType="BATCH" XmlFormat="22">
+    <Compare>
+        <Variant>SizeAndTime</Variant>            <!-- FFS default: size + mtime, no hashing -->
+        <Symlinks>Exclude</Symlinks>
+        <IgnoreTimeShift>0</IgnoreTimeShift>
+    </Compare>
+    <SyncConfig>
+        <Variant>Custom</Variant>
+        <CustomDirections>
+            <LeftOnly>none</LeftOnly>
+            <RightOnly>none</RightOnly>
+            <LeftNewer>none</LeftNewer>
+            <RightNewer>none</RightNewer>
+            <Different>none</Different>
+            <Conflict>none</Conflict>
+        </CustomDirections>
+        <DeletionPolicy>RecycleBin</DeletionPolicy>
+        <VersioningFolder/>
+    </SyncConfig>
+    <FolderPairs>
+        <Pair>
+            <Left>\\NAS\share\folderA</Left>
+            <Right>C:\local\folderA</Right>
+        </Pair>
+    </FolderPairs>
+    <Errors Ignore="true" Retry="0" Delay="5"/>
+    <PostSyncCommand Condition="Completion"/>
+    <LogFolder/>
+    <BatchExit>
+        <ProgressDialog Minimized="true" AutoClose="true"/>
+        <RunMinimized>true</RunMinimized>
+        <ErrorDialog>Cancel</ErrorDialog>
+        <OnCompletion/>
+    </BatchExit>
+</FreeFileSync>
