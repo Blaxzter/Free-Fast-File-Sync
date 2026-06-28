@@ -29,6 +29,11 @@ pub struct Settings {
     /// UI updates its item count). Clamped to a sane band at use.
     #[serde(default = "default_ticker_ms")]
     pub scan_ticker_ms: u64,
+    /// Live scan folder-tree depth: how many leading path segments to group live
+    /// scan activity by. `1` => top-level folders (default); higher nests deeper;
+    /// `0` => the live folder tree is off. Clamped to a sane max at use.
+    #[serde(default = "default_scan_tree_depth")]
+    pub scan_tree_depth: usize,
     /// `tracing` filter directive for the diagnostic log (`"info"`, `"debug"`,
     /// `"fast_file_sync_lib=debug"`, …). Applied at startup; `RUST_LOG` overrides.
     #[serde(default = "default_log_level")]
@@ -37,6 +42,9 @@ pub struct Settings {
 
 fn default_ticker_ms() -> u64 {
     120
+}
+fn default_scan_tree_depth() -> usize {
+    1
 }
 fn default_log_level() -> String {
     "info".to_string()
@@ -48,6 +56,7 @@ impl Default for Settings {
             scan_threads: 0,
             mtime_gran_ms: 0,
             scan_ticker_ms: default_ticker_ms(),
+            scan_tree_depth: default_scan_tree_depth(),
             log_level: default_log_level(),
         }
     }
@@ -63,6 +72,13 @@ impl Settings {
     /// The mtime granularity as nanoseconds (`0` => use the engine default).
     pub fn mtime_gran_ns(&self) -> i64 {
         (self.mtime_gran_ms as i64).saturating_mul(1_000_000)
+    }
+
+    /// Live scan folder-tree depth, clamped to a sane maximum. `0` keeps the live
+    /// folder tree OFF; a deeper value is bounded so a hostile setting can't blow
+    /// up the per-folder map cardinality.
+    pub fn tree_depth(&self) -> usize {
+        self.scan_tree_depth.min(8)
     }
 }
 
@@ -134,6 +150,7 @@ mod tests {
         assert_eq!(s, Settings::default());
         assert_eq!(s.scan_threads, 0);
         assert_eq!(s.scan_ticker_ms, 120);
+        assert_eq!(s.scan_tree_depth, 1);
         assert_eq!(s.log_level, "info");
     }
 
@@ -144,6 +161,7 @@ mod tests {
             scan_threads: 8,
             mtime_gran_ms: 2000,
             scan_ticker_ms: 250,
+            scan_tree_depth: 2,
             log_level: "debug".into(),
         };
         let saved = save(dir.path(), &s).unwrap();
@@ -184,6 +202,20 @@ mod tests {
         assert_eq!(with_ticker(0).ticker_ms(), 30);
         assert_eq!(with_ticker(100_000).ticker_ms(), 2000);
         assert_eq!(with_ticker(250).ticker_ms(), 250);
+    }
+
+    #[test]
+    fn tree_depth_is_clamped_and_zero_means_off() {
+        let depth = |d: usize| {
+            Settings {
+                scan_tree_depth: d,
+                ..Default::default()
+            }
+            .tree_depth()
+        };
+        assert_eq!(depth(0), 0, "0 keeps the live tree off");
+        assert_eq!(depth(1), 1);
+        assert_eq!(depth(100), 8, "clamped to the sane max");
     }
 
     #[test]

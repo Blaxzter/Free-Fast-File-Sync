@@ -21,7 +21,7 @@
 //! count and repeat) for a fair read.
 
 use fast_file_sync_lib::config::IgnorePolicy;
-use fast_file_sync_lib::scan::{resolve_scan_threads, scan_root_counted};
+use fast_file_sync_lib::scan::{resolve_scan_threads, scan_root_counted, ScanTree};
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::time::Instant;
@@ -56,11 +56,24 @@ fn main() {
         thread_counts = vec![0, 1, 2, 4, 8, 16, 32, 64];
     }
 
+    // Optional: tally the live folder tree during the walk, to measure its
+    // per-entry hot-loop overhead. `SCAN_TREE_DEPTH=1 cargo run ... --example scanbench`
+    // (0/unset = off, the shipped fast path).
+    let tree_depth: usize = std::env::var("SCAN_TREE_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
     let policy = IgnorePolicy::default();
     println!(
-        "scan benchmark: {}{}",
+        "scan benchmark: {}{}{}",
         root.display(),
-        if hash { "  (verify-by-hash)" } else { "" }
+        if hash { "  (verify-by-hash)" } else { "" },
+        if tree_depth > 0 {
+            format!("  (scan-tree depth {tree_depth})")
+        } else {
+            String::new()
+        }
     );
     println!(
         "auto default resolves to {} threads",
@@ -73,8 +86,9 @@ fn main() {
 
     for &t in &thread_counts {
         let scanned = AtomicU64::new(0);
+        let tree = (tree_depth > 0).then(|| ScanTree::new(tree_depth));
         let start = Instant::now();
-        match scan_root_counted(root, &policy, hash, &scanned, t) {
+        match scan_root_counted(root, &policy, hash, &scanned, t, tree.as_ref()) {
             Ok(res) => {
                 let secs = start.elapsed().as_secs_f64();
                 let rate = res.entries.len() as f64 / secs.max(0.001);

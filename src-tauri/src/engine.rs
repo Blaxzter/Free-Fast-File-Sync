@@ -9,8 +9,8 @@ use crate::config::JobConfig;
 use crate::error::{Result, SyncError};
 use crate::fsops;
 use crate::model::*;
-use crate::plan::{build_plan, PlanInputs};
-use crate::scan::scan_root_counted;
+use crate::plan::{build_plan, PlanInputs, PlanProgress};
+use crate::scan::{scan_root_counted, ScanTree};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -91,10 +91,16 @@ type ScanBoth = (
     bool,
 );
 
-/// Scans both roots in parallel, threading a `scanned` counter into both walks so
-/// a caller can poll live progress. The returned bool is `true` when EITHER scan
-/// hit read errors — in that case deletions must be suppressed this run.
-fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
+/// Scans both roots in parallel, threading a `scanned` counter (and, when present,
+/// a shared `tree`) into both walks so a caller can poll live progress. Both roots
+/// share the same `tree`, so its per-folder counts are the merged A+B activity. The
+/// returned bool is `true` when EITHER scan hit read errors — in that case
+/// deletions must be suppressed this run.
+fn scan_both_counted(
+    cfg: &JobConfig,
+    scanned: &AtomicU64,
+    tree: Option<&ScanTree>,
+) -> Result<ScanBoth> {
     let (ra, rb) = rayon::join(
         || {
             scan_root_counted(
@@ -103,6 +109,7 @@ fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
                 cfg.verify_by_hash,
                 scanned,
                 cfg.scan_threads,
+                tree,
             )
         },
         || {
@@ -112,6 +119,7 @@ fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
                 cfg.verify_by_hash,
                 scanned,
                 cfg.scan_threads,
+                tree,
             )
         },
     );
@@ -162,7 +170,7 @@ pub fn preview_counted(
     baseline_path: &Path,
     scanned: &AtomicU64,
 ) -> Result<SyncPlan> {
-    preview_counted_stats(cfg, baseline_path, scanned).map(|(plan, _)| plan)
+    preview_counted_stats(cfg, baseline_path, scanned, None, None).map(|(plan, _)| plan)
 }
 
 /// Like [`preview_counted`], but also returns per-side [`ScanStats`] for the
@@ -173,10 +181,12 @@ pub fn preview_counted_stats(
     cfg: &JobConfig,
     baseline_path: &Path,
     scanned: &AtomicU64,
+    tree: Option<&ScanTree>,
+    plan_progress: Option<&PlanProgress>,
 ) -> Result<(SyncPlan, ScanStats)> {
     validate_job(cfg)?;
     let (base, status) = load_baseline(baseline_path);
-    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned, tree)?;
     let stats = ScanStats {
         entries_a: ra.entries.len(),
         entries_b: rb.entries.len(),
@@ -195,6 +205,7 @@ pub fn preview_counted_stats(
         gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
+        plan_progress,
     });
     Ok((plan, stats))
 }
@@ -236,7 +247,8 @@ pub fn execute_counted_stats(
     validate_job(cfg)?;
     let bpath = baseline_path.to_path_buf();
     let (mut base, status) = load_baseline(&bpath);
-    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
+    // Execute's re-scan has no live UI ticker, so no folder tree is threaded.
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned, None)?;
     let stats = ScanStats {
         entries_a: ra.entries.len(),
         entries_b: rb.entries.len(),
@@ -255,6 +267,7 @@ pub fn execute_counted_stats(
         gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
+        plan_progress: None,
     });
 
     if plan.big_delete.is_some() && !confirm_big_delete {

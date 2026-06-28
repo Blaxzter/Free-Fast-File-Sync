@@ -13,17 +13,34 @@
  * latest progress), so existing consumers keep working unchanged. */
 
 import { create } from "zustand";
-import type { ApplyReport, Job, RunProgress, RunScanProgress } from "../ipc/bindings";
+import { topSegment } from "../domain/progressTree";
+import type {
+  ApplyReport,
+  Job,
+  RunPlanProgress,
+  RunProgress,
+  RunScanProgress,
+  RunScanTree,
+  ScanTreeFolder,
+} from "../ipc/bindings";
 import {
   onRunFinished,
   onRunPairDone,
+  onRunPlanProgress,
   onRunProgress,
   onRunScan,
   onRunScanProgress,
+  onRunScanTree,
   onRunStarted,
 } from "../ipc/events";
 
 export type EnginePhase = "idle" | "scanning" | "applying";
+
+/** Per-pair lifecycle status within a run, keyed by pair_id. Pairs not yet
+ * reached are simply absent (the view treats absent as "pending" using the Job's
+ * pair order). "aborted" = a pair left mid-flight by cancel or an upstream error
+ * (we can't tell which from run://finished alone). */
+export type PairRunStatus = "pending" | "scanning" | "applying" | "done" | "aborted";
 
 /** Per-run live mirror: phase, per-pair progress + reports, and where we are in
  * the sequential pair loop. */
@@ -35,10 +52,37 @@ export interface RunMirror {
   activePairIndex: number;
   /** Live cumulative count of entries recorded during the scan phase. */
   scanned: number;
+  /** Live planning-phase progress for the active pair (post-scan disk probes):
+   * probes done / total. planTotal > 0 means planning is running (the scan count
+   * has stopped); both reset to 0 at each pair's scan start. */
+  planDone: number;
+  planTotal: number;
+  /** Live shallow per-folder scan activity for the pair currently being scanned,
+   * replaced wholesale on each run://scan-tree snapshot. Empty when the feature is
+   * off or pre-first-tick. */
+  scanTree: ScanTreeFolder[];
+  /** The pair_id the live scanTree belongs to (for the "which pair" label). */
+  scanPairId: string | null;
+  /** Per-pair lifecycle status keyed by pair_id (absent => pending). Drives the
+   * multi-pair list in ProgressTree. */
+  pairStatus: Record<string, PairRunStatus>;
+  /** The pair_id currently scanning/applying — the row the view auto-expands to
+   * its folder tree. null between pairs and when finished. */
+  activePairId: string | null;
+  /** Frozen per-pair recap captured at pair-done so collapsed/finished rows keep
+   * their numbers (scanned delta + applied count). */
+  pairRecap: Record<string, { scanned: number; applied: number }>;
+  /** Cumulative `scanned` when the current pair started scanning, to derive that
+   * pair's scanned delta on pair-done. */
+  scanBaseAtPairStart: number;
   /** Epoch ms when the run started (for elapsed time + throughput). */
   startedAt: number;
   /** Latest progress event per pair_id (per-pair progress strip). */
   progressByPair: Record<string, RunProgress>;
+  /** Live count of applied items per top-level folder, per pair_id
+   * (pairId -> { topFolder -> count }). Bumped once per run://progress event;
+   * feeds the apply-phase folder-activity tree (ProgressTree). */
+  doneByFolder: Record<string, Record<string, number>>;
   /** Final apply report per pair_id (filled on pair-done during an apply). */
   reportByPair: Record<string, ApplyReport>;
   /** Most recent progress event for the run (back-compat single-strip view). */
@@ -55,6 +99,9 @@ export interface RunView {
   /** Live scan count + start time of the active run (idle → 0 / null). */
   scanned: number;
   startedAt: number | null;
+  /** Live planning-phase probe progress (planTotal > 0 => planning is running). */
+  planDone: number;
+  planTotal: number;
 }
 
 const idleView: RunView = {
@@ -64,6 +111,8 @@ const idleView: RunView = {
   report: null,
   scanned: 0,
   startedAt: null,
+  planDone: 0,
+  planTotal: 0,
 };
 
 function newMirror(runId: string, jobId: string | null, pairCount: number): RunMirror {
@@ -74,8 +123,17 @@ function newMirror(runId: string, jobId: string | null, pairCount: number): RunM
     pairCount,
     activePairIndex: 0,
     scanned: 0,
+    planDone: 0,
+    planTotal: 0,
+    scanTree: [],
+    scanPairId: null,
+    pairStatus: {},
+    activePairId: null,
+    pairRecap: {},
+    scanBaseAtPairStart: 0,
     startedAt: Date.now(),
     progressByPair: {},
+    doneByFolder: {},
     reportByPair: {},
     progress: null,
   };
@@ -93,6 +151,8 @@ function viewOf(runs: Record<string, RunMirror>, activeRunId: string | null): Ru
     report: null,
     scanned: m.scanned,
     startedAt: m.startedAt,
+    planDone: m.planDone,
+    planTotal: m.planTotal,
   };
 }
 
@@ -129,6 +189,8 @@ interface UiState {
   applyRunStarted: (e: { run_id: string; job_id: string; pair_count: number }) => void;
   applyRunScan: (e: { run_id: string; pair_id: string; phase: string }) => void;
   applyRunScanProgress: (e: RunScanProgress) => void;
+  applyRunScanTree: (e: RunScanTree) => void;
+  applyRunPlanProgress: (e: RunPlanProgress) => void;
   applyRunProgress: (p: RunProgress) => void;
   applyRunPairDone: (e: { run_id: string; pair_id: string }) => void;
   applyRunFinished: (e: { run_id: string }) => void;
@@ -185,32 +247,83 @@ export const useStore = create<UiState>((set) => {
         return { runs, activeRunId: e.run_id, run: viewOf(runs, e.run_id) };
       }),
 
-    applyRunScan: (e) => mutateActive(e.run_id, (m) => ({ ...m })),
+    applyRunScan: (e) =>
+      mutateActive(e.run_id, (m) => ({
+        ...m,
+        // A pair entered its scan: it becomes the active (auto-expanded) pair.
+        // run://scan fires per pair in BOTH preview and execute, so this also
+        // reflects execute's per-pair re-scan; the first progress event flips it
+        // to "applying".
+        phase: "scanning",
+        activePairId: e.pair_id,
+        scanPairId: e.pair_id,
+        scanTree: [], // reset the live tree at the pair boundary
+        planDone: 0, // back to the scanning sub-state (planning not started)
+        planTotal: 0,
+        scanBaseAtPairStart: m.scanned, // anchor the per-pair scanned delta
+        pairStatus: { ...m.pairStatus, [e.pair_id]: "scanning" },
+      })),
 
     applyRunScanProgress: (e) => mutateActive(e.run_id, (m) => ({ ...m, scanned: e.scanned })),
 
+    applyRunScanTree: (e) =>
+      mutateActive(e.run_id, (m) => ({ ...m, scanTree: e.folders, scanPairId: e.pair_id })),
+
+    applyRunPlanProgress: (e) =>
+      mutateActive(e.run_id, (m) => ({ ...m, planDone: e.done, planTotal: e.total })),
+
     applyRunProgress: (p) =>
-      mutateActive(p.run_id, (m) => ({
-        ...m,
-        phase: "applying",
-        activePairIndex: p.pair_index,
-        pairCount: p.pair_count || m.pairCount,
-        progress: p,
-        progressByPair: { ...m.progressByPair, [p.pair_id]: p },
-      })),
+      mutateActive(p.run_id, (m) => {
+        // Tally this applied item under its top-level folder (per pair) for the
+        // apply-phase folder-activity tree. One event == one applied item.
+        const folder = topSegment(p.path);
+        const pairFolders = m.doneByFolder[p.pair_id] ?? {};
+        return {
+          ...m,
+          phase: "applying",
+          activePairIndex: p.pair_index,
+          activePairId: p.pair_id,
+          pairCount: p.pair_count || m.pairCount,
+          progress: p,
+          progressByPair: { ...m.progressByPair, [p.pair_id]: p },
+          doneByFolder: {
+            ...m.doneByFolder,
+            [p.pair_id]: { ...pairFolders, [folder]: (pairFolders[folder] ?? 0) + 1 },
+          },
+          pairStatus: { ...m.pairStatus, [p.pair_id]: "applying" },
+        };
+      }),
 
     applyRunPairDone: (e) =>
-      mutateActive(e.run_id, (m) => ({
-        ...m,
-        activePairIndex: Math.min(m.activePairIndex + 1, Math.max(m.pairCount - 1, 0)),
-      })),
+      mutateActive(e.run_id, (m) => {
+        const applied = m.progressByPair[e.pair_id]?.done ?? 0; // 0 in preview (no progress)
+        const scanned = Math.max(0, m.scanned - m.scanBaseAtPairStart);
+        return {
+          ...m,
+          activePairIndex: Math.min(m.activePairIndex + 1, Math.max(m.pairCount - 1, 0)),
+          // The active row collapses between pairs.
+          activePairId: m.activePairId === e.pair_id ? null : m.activePairId,
+          scanPairId: m.scanPairId === e.pair_id ? null : m.scanPairId,
+          pairStatus: { ...m.pairStatus, [e.pair_id]: "done" },
+          pairRecap: { ...m.pairRecap, [e.pair_id]: { scanned, applied } },
+        };
+      }),
 
     applyRunFinished: (e) =>
       set((st) => {
         if (st.activeRunId !== e.run_id) return st; // drop foreign finished
         const prev = st.runs[e.run_id];
         const runs = prev
-          ? { ...st.runs, [e.run_id]: { ...prev, phase: "idle" as EnginePhase, progress: null } }
+          ? {
+              ...st.runs,
+              [e.run_id]: {
+                ...prev,
+                phase: "idle" as EnginePhase,
+                progress: null,
+                activePairId: null,
+                scanPairId: null,
+              },
+            }
           : st.runs;
         return { runs, activeRunId: null, run: idleView };
       }),
@@ -228,6 +341,8 @@ export async function subscribeRunEvents(): Promise<() => void> {
     onRunStarted((e) => st().applyRunStarted(e)),
     onRunScan((e) => st().applyRunScan(e)),
     onRunScanProgress((e) => st().applyRunScanProgress(e)),
+    onRunScanTree((e) => st().applyRunScanTree(e)),
+    onRunPlanProgress((e) => st().applyRunPlanProgress(e)),
     onRunProgress((p) => st().applyRunProgress(p)),
     onRunPairDone((e) => st().applyRunPairDone(e)),
     onRunFinished((e) => st().applyRunFinished(e)),

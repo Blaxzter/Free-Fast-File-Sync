@@ -50,6 +50,60 @@ describe("run-aware store", () => {
     expect(s.run.progress?.done).toBe(5);
   });
 
+  it("accumulates applied items per top-level folder for the active run", () => {
+    const st = useStore.getState();
+    st.applyRunStarted({ run_id: "RUN_A", job_id: "JOB", pair_count: 1 });
+    st.applyRunProgress(progress("RUN_A", "P0", 1)); // f1.txt -> root ""
+    st.applyRunProgress({ ...progress("RUN_A", "P0", 2), path: "Photos/a.jpg" });
+    st.applyRunProgress({ ...progress("RUN_A", "P0", 3), path: "Photos/b.jpg" });
+
+    expect(useStore.getState().runs["RUN_A"]!.doneByFolder["P0"]).toEqual({ "": 1, Photos: 2 });
+  });
+
+  it("replaces the live scan-tree snapshot + tracks its pair, drops foreign ones", () => {
+    const st = useStore.getState();
+    st.applyRunStarted({ run_id: "RUN_A", job_id: "JOB", pair_count: 2 });
+    st.applyRunScanTree({
+      run_id: "RUN_A",
+      pair_id: "P0",
+      folders: [
+        { path: "Photos", count: 1200 },
+        { path: "", count: 3 },
+      ],
+    });
+    expect(useStore.getState().runs["RUN_A"]!.scanTree).toEqual([
+      { path: "Photos", count: 1200 },
+      { path: "", count: 3 },
+    ]);
+    expect(useStore.getState().runs["RUN_A"]!.scanPairId).toBe("P0");
+
+    // A later snapshot (next pair) replaces the tree wholesale + retargets the pair.
+    st.applyRunScanTree({ run_id: "RUN_A", pair_id: "P1", folders: [{ path: "src", count: 500 }] });
+    expect(useStore.getState().runs["RUN_A"]!.scanTree).toEqual([{ path: "src", count: 500 }]);
+    expect(useStore.getState().runs["RUN_A"]!.scanPairId).toBe("P1");
+
+    // A foreign run's snapshot is dropped (no cross-talk).
+    st.applyRunScanTree({ run_id: "OTHER", pair_id: "PX", folders: [{ path: "x", count: 9 }] });
+    expect(useStore.getState().runs["OTHER"]).toBeUndefined();
+  });
+
+  it("tracks planning-phase probe progress and resets it at each pair's scan", () => {
+    const st = useStore.getState();
+    st.applyRunStarted({ run_id: "RUN_A", job_id: "JOB", pair_count: 2 });
+    st.applyRunScan({ run_id: "RUN_A", pair_id: "P0", phase: "Scanning" });
+    st.applyRunPlanProgress({ run_id: "RUN_A", done: 40, total: 100 });
+
+    expect(useStore.getState().runs["RUN_A"]!.planTotal).toBe(100);
+    expect(useStore.getState().runs["RUN_A"]!.planDone).toBe(40);
+    // exposed on the legacy view for the bottom StatusStrip
+    expect(useStore.getState().run.planTotal).toBe(100);
+
+    // the next pair's scan clears planning progress (back to the scanning sub-state)
+    st.applyRunScan({ run_id: "RUN_A", pair_id: "P1", phase: "Scanning" });
+    expect(useStore.getState().runs["RUN_A"]!.planTotal).toBe(0);
+    expect(useStore.getState().runs["RUN_A"]!.planDone).toBe(0);
+  });
+
   it("drops a progress event for an unknown/foreign runId", () => {
     const st = useStore.getState();
     st.applyRunStarted({ run_id: "RUN_A", job_id: "JOB", pair_count: 1 });

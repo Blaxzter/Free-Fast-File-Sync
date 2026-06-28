@@ -13,8 +13,21 @@ use crate::model::*;
 use crate::pathutil::{case_fold, extended, os_path};
 use crate::reconcile::{classify_change, default_resolution, reconcile, resolution_options};
 use crate::scan::hash_file;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Live planning progress for the post-scan filtered-file disk probes — the slow
+/// part over a NAS (one stat per one-sided key). `total` is how many keys will be
+/// probed; `done` counts probes completed. A poller (the run ticker) reads these
+/// to show determinate "checking files" progress while `build_plan` runs, so the
+/// planning phase isn't a silent freeze after the scan count stops moving.
+#[derive(Default)]
+pub struct PlanProgress {
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+}
 
 pub struct PlanInputs<'a> {
     pub cfg: &'a JobConfig,
@@ -27,6 +40,9 @@ pub struct PlanInputs<'a> {
     /// Set when a scan reported read errors. While true, NO deletion is
     /// propagated: an unreadable path must never be mistaken for a removal.
     pub suppress_deletes: bool,
+    /// Optional live progress sink for the disk-probe pre-pass (None => no live
+    /// reporting, e.g. the apply-time re-scan which has no UI ticker).
+    pub plan_progress: Option<&'a PlanProgress>,
 }
 
 pub fn build_plan(inp: PlanInputs) -> SyncPlan {
@@ -39,6 +55,7 @@ pub fn build_plan(inp: PlanInputs) -> SyncPlan {
         gran_ns,
         warnings,
         suppress_deletes,
+        plan_progress,
     } = inp;
     let trust_baseline = status == BaselineStatusKind::Present;
     let block_deletes = !trust_baseline || suppress_deletes;
@@ -48,21 +65,60 @@ pub fn build_plan(inp: PlanInputs) -> SyncPlan {
     universe.extend(b.keys());
     universe.extend(base.entries.keys());
 
+    // Filtered-file delete guard, parallel pre-pass. A key absent from a side's
+    // scan but still on disk was ignored (asymmetric / newly-added gitignore
+    // rule), NOT deleted, and must be excluded from the plan. Each probe is a real
+    // stat syscall on the *missing* side only — over a NAS that is a network
+    // round-trip — so we overlap them across the rayon pool exactly like the
+    // scanner walks, instead of stalling single-threaded for the whole set after
+    // the scan finishes. Semantics are byte-identical to probing inline: only
+    // one-sided keys are probed, each only on the side whose scan lacks the key.
+    let probe_keys: Vec<&String> = universe
+        .iter()
+        .copied()
+        .filter(|k| a.get(*k).is_none() || b.get(*k).is_none())
+        .collect();
+    if let Some(pp) = plan_progress {
+        pp.total.store(probe_keys.len() as u64, Ordering::Relaxed);
+        pp.done.store(0, Ordering::Relaxed);
+    }
+    let probe = || -> BTreeSet<&String> {
+        probe_keys
+            .par_iter()
+            .copied()
+            .filter(|&key| {
+                let on_disk = (a.get(key).is_none() && disk_exists(&os_path(&cfg.root_a, key)))
+                    || (b.get(key).is_none() && disk_exists(&os_path(&cfg.root_b, key)));
+                if let Some(pp) = plan_progress {
+                    pp.done.fetch_add(1, Ordering::Relaxed);
+                }
+                on_disk
+            })
+            .collect()
+    };
+    // The probes are I/O-bound (a NAS round-trip each), so run them on a pool sized
+    // like the scanner (user-tunable via scan_threads) to overlap latency, rather
+    // than the CPU-sized global pool. Falls back to the global pool if the pool
+    // can't be built.
+    let filtered_out: BTreeSet<&String> = match rayon::ThreadPoolBuilder::new()
+        .num_threads(crate::scan::resolve_scan_threads(cfg.scan_threads))
+        .build()
+    {
+        Ok(pool) => pool.install(probe),
+        Err(_) => probe(),
+    };
+
     let mut items: Vec<PlanItem> = Vec::new();
 
     for key in universe {
+        // Filtered-file delete guard (probed in parallel above): a key still on
+        // disk but absent from a side's scan was ignored, never synced.
+        if filtered_out.contains(&key) {
+            continue;
+        }
+
         let a_meta = a.get(key);
         let b_meta = b.get(key);
-
-        // Filtered-file delete guard: a key missing from a side's scan but still
-        // physically present means it was ignored (asymmetric or newly-added
-        // gitignore rule), NOT deleted. It is not a sync member — leave it alone.
-        if a_meta.is_none() && disk_exists(&os_path(&cfg.root_a, key)) {
-            continue;
-        }
-        if b_meta.is_none() && disk_exists(&os_path(&cfg.root_b, key)) {
-            continue;
-        }
 
         let base_meta = base.get(key);
         if a_meta.is_none() && b_meta.is_none() && base_meta.is_none() {
@@ -437,6 +493,15 @@ mod tests {
         }
     }
 
+    fn dir_meta() -> Meta {
+        Meta {
+            kind: EntryKind::Dir,
+            size: 0,
+            mtime_ns: 0,
+            hash: None,
+        }
+    }
+
     fn empty_inputs<'a>(
         cfg: &'a JobConfig,
         a: &'a BTreeMap<String, Meta>,
@@ -453,6 +518,7 @@ mod tests {
             gran_ns: 0,
             warnings: vec![],
             suppress_deletes: false,
+            plan_progress: None,
         }
     }
 
@@ -495,6 +561,7 @@ mod tests {
             gran_ns: 0,
             warnings: vec![],
             suppress_deletes,
+            plan_progress: None,
         }
     }
 
@@ -842,6 +909,145 @@ mod tests {
     }
 
     #[test]
+    fn first_sync_filtered_on_disk_a_is_not_clobbered_by_b() {
+        // The case a naive "skip the guard when block_deletes" optimization would
+        // silently break: FIRST SYNC (empty baseline => block_deletes=true). A has
+        // `f.cfg` only on DISK (filtered out of A's scan); B genuinely has `f.cfg`
+        // in its scan. The (parallel) guard must STILL exclude the key so B's copy
+        // is never written over A's on-disk filtered file. Without the guard this
+        // reconciles (Unchanged, Created) => CopyBtoA and clobbers A.
+        let da = tempdir().unwrap();
+        let db = tempdir().unwrap();
+        let cfg = cfg(da.path(), db.path());
+
+        // A: `keep.txt` scanned; `f.cfg` on disk but NOT in the scan map.
+        let mut a = BTreeMap::new();
+        a.insert("keep.txt".to_string(), file(1, 1));
+        fs::write(da.path().join("keep.txt"), "x").unwrap();
+        fs::write(da.path().join("f.cfg"), "filtered-on-A").unwrap(); // on disk, unscanned
+
+        // B: scans `keep.txt` and a real `f.cfg`.
+        let mut b = BTreeMap::new();
+        b.insert("keep.txt".to_string(), file(1, 1));
+        b.insert("f.cfg".to_string(), file(9, 9));
+        fs::write(db.path().join("keep.txt"), "x").unwrap();
+        fs::write(db.path().join("f.cfg"), "real-on-B").unwrap();
+
+        let base = Baseline::default(); // empty => FirstSync => block_deletes
+
+        let plan = build_plan(inputs_with(
+            &cfg,
+            &a,
+            &b,
+            &base,
+            BaselineStatusKind::FirstSync,
+            false,
+        ));
+
+        // f.cfg is excluded entirely: no CopyBtoA, no action; A's on-disk file is
+        // left alone (and still holds its original content).
+        assert!(
+            plan.items.iter().all(|i| i.path != "f.cfg"),
+            "filtered on-disk A file must be excluded on first sync (no CopyBtoA)"
+        );
+        assert_eq!(
+            fs::read_to_string(da.path().join("f.cfg")).unwrap(),
+            "filtered-on-A"
+        );
+    }
+
+    #[test]
+    fn parallel_guard_excludes_many_one_sided_filtered_files() {
+        // Stress the parallel pre-pass: many one-sided keys whose files are still
+        // on disk on the missing side must ALL be excluded, none synced — the NAS
+        // first-sync shape (thousands of one-sided probes) in miniature.
+        let da = tempdir().unwrap();
+        let db = tempdir().unwrap();
+        let cfg = cfg(da.path(), db.path());
+
+        let a = BTreeMap::new(); // A's scan is empty...
+        let mut b = BTreeMap::new();
+        let mut base = Baseline::default();
+        for i in 0..200 {
+            let k = format!("dir{}/f{i}.log", i % 7);
+            // Present in base + B scan, absent from A's scan but STILL on disk A.
+            b.insert(k.clone(), file(1, 5));
+            base.update_entry(&k, Some(file(1, 5)));
+            let ap = os_path(da.path(), &k);
+            fs::create_dir_all(ap.parent().unwrap()).unwrap();
+            fs::write(&ap, "still-here").unwrap(); // on disk A, unscanned
+            let bp = os_path(db.path(), &k);
+            fs::create_dir_all(bp.parent().unwrap()).unwrap();
+            fs::write(&bp, "x").unwrap();
+        }
+
+        let plan = build_plan(inputs_with(
+            &cfg,
+            &a,
+            &b,
+            &base,
+            BaselineStatusKind::Present,
+            false,
+        ));
+        // Every one-sided-but-on-disk key is excluded; zero deletes, zero copies.
+        assert!(plan.items.iter().all(|i| !i.path.ends_with(".log")));
+        assert_eq!(plan.summary.delete_a + plan.summary.delete_b, 0);
+        assert_eq!(plan.summary.copy_a_to_b + plan.summary.copy_b_to_a, 0);
+    }
+
+    #[test]
+    fn nested_filtered_on_disk_file_in_present_dir_is_excluded() {
+        // Regression net (locks the disk-probe guard against a future in-memory
+        // "scan-aware" rewrite): a file filtered from A's scan by an IN-TREE rule
+        // (.gitignore / .ignore / hidden / asymmetric glob) while its PARENT DIR
+        // is still enumerated, and the file is still on disk. The other side has a
+        // real copy. The guard MUST exclude it (the scan looks "clean", so any
+        // in-memory "parent enumerated => genuinely gone" inference would instead
+        // emit a DeleteB and lose B's live copy). Only the on-disk probe gets this
+        // right, because in-tree ignore state is not retained after the scan.
+        let da = tempdir().unwrap();
+        let db = tempdir().unwrap();
+        let cfg = cfg(da.path(), db.path());
+
+        // A's scan: dir `src` present, but `src/cache.tmp` filtered out — yet the
+        // file is physically on disk A.
+        let mut a = BTreeMap::new();
+        a.insert("src".to_string(), dir_meta());
+        fs::create_dir(da.path().join("src")).unwrap();
+        fs::write(da.path().join("src/cache.tmp"), "live-on-A").unwrap();
+
+        // B genuinely has src/cache.tmp (scan + disk).
+        let mut b = BTreeMap::new();
+        b.insert("src".to_string(), dir_meta());
+        b.insert("src/cache.tmp".to_string(), file(8, 9));
+        fs::create_dir(db.path().join("src")).unwrap();
+        fs::write(db.path().join("src/cache.tmp"), "live-on-B").unwrap();
+
+        let mut base = Baseline::default();
+        base.update_entry("src", Some(dir_meta()));
+        base.update_entry("src/cache.tmp", Some(file(8, 9)));
+
+        let plan = build_plan(inputs_with(
+            &cfg,
+            &a,
+            &b,
+            &base,
+            BaselineStatusKind::Present,
+            false,
+        ));
+
+        assert!(
+            plan.items.iter().all(|i| i.path != "src/cache.tmp"),
+            "an in-tree-filtered file still on disk (parent dir present) must be EXCLUDED, never deleted"
+        );
+        assert_eq!(plan.summary.delete_a + plan.summary.delete_b, 0);
+        assert_eq!(
+            fs::read_to_string(db.path().join("src/cache.tmp")).unwrap(),
+            "live-on-B"
+        );
+    }
+
+    #[test]
     fn modify_delete_is_conflict() {
         let da = tempdir().unwrap();
         let db = tempdir().unwrap();
@@ -891,6 +1097,7 @@ mod tests {
             gran_ns: 0,
             warnings: vec![],
             suppress_deletes: true,
+            plan_progress: None,
         });
         let it = plan.items.iter().find(|i| i.path == "f.txt").unwrap();
         assert_eq!(

@@ -227,6 +227,45 @@ struct RunScanProgress {
     scanned: u64,
 }
 
+/// Live, shallow folder-activity snapshot pushed during the scan phase, so the run
+/// view can show WHICH folders are being walked, not just a flat count. Counts are
+/// merged across both roots of the CURRENT pair (the tree resets at each pair
+/// boundary); `pair_id` lets the UI label the snapshot with its folder pair.
+#[derive(Clone, Serialize)]
+struct RunScanTree {
+    run_id: String,
+    pair_id: String,
+    folders: Vec<ScanTreeFolder>,
+}
+
+#[derive(Clone, Serialize)]
+struct ScanTreeFolder {
+    /// Top-level (or `scan_tree_depth`-deep) relative folder; empty = root level.
+    path: String,
+    count: u64,
+}
+
+/// Live progress of the post-scan planning phase (the filtered-file disk probes —
+/// the slow part over a NAS). Emitted while the scan count is frozen so the UI can
+/// show "checking files" movement instead of looking stuck.
+#[derive(Clone, Serialize)]
+struct RunPlanProgress {
+    run_id: String,
+    done: u64,
+    total: u64,
+}
+
+/// Cap on folders carried in a single `run://scan-tree` event (busiest first).
+const SCAN_TREE_MAX_FOLDERS: usize = 64;
+
+/// Snapshot a [`scan::ScanTree`] into the serializable event payload shape.
+fn scan_tree_folders(tree: &scan::ScanTree) -> Vec<ScanTreeFolder> {
+    tree.snapshot(SCAN_TREE_MAX_FOLDERS)
+        .into_iter()
+        .map(|(path, count)| ScanTreeFolder { path, count })
+        .collect()
+}
+
 /// Build one pair's run-log record from its scan stats + timing. `err` is `Some`
 /// when the pair failed (its scan stats are then meaningless and passed as
 /// default). `scanned - before` is the live counter delta attributed to this pair.
@@ -281,11 +320,11 @@ async fn preview_job(
     let job = state.store.load(&job_id)?;
     let mut resolved = select_pairs(&job, &pair_ids);
     // Fold global Settings defaults (scan threads, mtime granularity) into any pair
-    // left on "auto", and snapshot the live-progress ticker interval.
-    let ticker_ms = {
+    // left on "auto", and snapshot the live-progress ticker interval + tree depth.
+    let (ticker_ms, tree_depth) = {
         let s = state.settings.lock().unwrap();
         apply_global_defaults(&mut resolved, &s);
-        s.ticker_ms()
+        (s.ticker_ms(), s.tree_depth())
     };
     let selected_ids: Vec<String> = resolved.iter().map(|r| r.pair_id.clone()).collect();
 
@@ -319,17 +358,36 @@ async fn preview_job(
         let store = store::Store::new(store_dir);
         // Live scan progress: a shared counter the parallel walk bumps per entry,
         // polled by a ticker thread that emits run://scan-progress (~8/sec). The
-        // count is cumulative across the job's pairs.
+        // count is cumulative across the job's pairs. When the folder tree is
+        // enabled (scan_tree_depth > 0), the walk also tallies per-folder activity
+        // into a shared ScanTree the ticker snapshots into run://scan-tree.
         let scanned = Arc::new(AtomicU64::new(0));
+        let tree = (tree_depth > 0).then(|| Arc::new(scan::ScanTree::new(tree_depth)));
+        // Planning (post-scan disk-probe) progress: the slow NAS part that runs
+        // AFTER the scan count stops moving. The ticker emits it so the UI shows
+        // "checking files" movement instead of a frozen count.
+        let plan_progress = Arc::new(plan::PlanProgress::default());
+        // The pair currently being scanned, so the ticker can tag each folder
+        // snapshot with its pair (the main loop updates this at each pair boundary).
+        let cur_pair = Arc::new(Mutex::new(String::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let ticker = {
             let app = app_for_task.clone();
             let run_id = run_id_task.clone();
             let scanned = scanned.clone();
+            let tree = tree.clone();
+            let plan_progress = plan_progress.clone();
+            let cur_pair = cur_pair.clone();
             let stop = stop.clone();
+            // The item count is cheap, so it ticks every interval; the folder tree
+            // is a larger payload, so throttle it lightly (~every 200ms) — still
+            // steady, just not flooding on a very fast ticker.
+            let tree_every = (200 / ticker_ms.max(1)).max(1);
             std::thread::spawn(move || {
+                let mut tick: u64 = 0;
                 while !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(ticker_ms));
+                    tick += 1;
                     let _ = app.emit(
                         "run://scan-progress",
                         RunScanProgress {
@@ -337,6 +395,31 @@ async fn preview_job(
                             scanned: scanned.load(Ordering::Relaxed),
                         },
                     );
+                    // Planning phase: emit determinate probe progress while it runs.
+                    let plan_total = plan_progress.total.load(Ordering::Relaxed);
+                    if plan_total > 0 {
+                        let _ = app.emit(
+                            "run://plan-progress",
+                            RunPlanProgress {
+                                run_id: run_id.clone(),
+                                done: plan_progress.done.load(Ordering::Relaxed),
+                                total: plan_total,
+                            },
+                        );
+                    }
+                    if let Some(t) = &tree {
+                        if tick % tree_every == 0 {
+                            let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
+                            let _ = app.emit(
+                                "run://scan-tree",
+                                RunScanTree {
+                                    run_id: run_id.clone(),
+                                    pair_id,
+                                    folders: scan_tree_folders(t),
+                                },
+                            );
+                        }
+                    }
                 }
             })
         };
@@ -356,6 +439,18 @@ async fn preview_job(
         let mut run_err: Option<SyncError> = None;
 
         for r in &resolved {
+            // Move the live folder tree to this pair: reset the counts and point the
+            // ticker's pair cursor at it, so the snapshot shows only this pair. Also
+            // clear planning progress so a stale "checking files" bar from the
+            // previous pair doesn't linger into this pair's scan.
+            if let Some(t) = &tree {
+                t.clear();
+            }
+            plan_progress.done.store(0, Ordering::Relaxed);
+            plan_progress.total.store(0, Ordering::Relaxed);
+            if let Ok(mut g) = cur_pair.lock() {
+                r.pair_id.clone_into(&mut g);
+            }
             let _ = app_for_task.emit(
                 "run://scan",
                 RunScan {
@@ -368,7 +463,13 @@ async fn preview_job(
             let t0 = Instant::now();
             let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
             let status = engine::baseline_status(&bpath);
-            match engine::preview_counted_stats(&r.config, &bpath, &scanned) {
+            match engine::preview_counted_stats(
+                &r.config,
+                &bpath,
+                &scanned,
+                tree.as_deref(),
+                Some(&plan_progress),
+            ) {
                 Ok((plan, stats)) => {
                     rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
                     pairs.push(PairPreview {
@@ -401,7 +502,7 @@ async fn preview_job(
 
         stop.store(true, Ordering::Relaxed);
         let _ = ticker.join();
-        // One final exact count once the walk has settled.
+        // One final exact count + folder snapshot once the walk has settled.
         let _ = app_for_task.emit(
             "run://scan-progress",
             RunScanProgress {
@@ -409,6 +510,17 @@ async fn preview_job(
                 scanned: scanned.load(Ordering::Relaxed),
             },
         );
+        if let Some(t) = &tree {
+            let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
+            let _ = app_for_task.emit(
+                "run://scan-tree",
+                RunScanTree {
+                    run_id: run_id_task.clone(),
+                    pair_id,
+                    folders: scan_tree_folders(t),
+                },
+            );
+        }
         // Preview has no per-loop cancel observation, so it is never "cancelled".
         rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), false);
 

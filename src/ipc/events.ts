@@ -10,17 +10,21 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   zRunFinished,
   zRunPairDone,
+  zRunPlanProgress,
   zRunProgress,
   zRunScan,
   zRunScanProgress,
+  zRunScanTree,
   zRunStarted,
 } from "../domain/schemas";
 import type {
   RunFinished,
   RunPairDone,
+  RunPlanProgress,
   RunProgress,
   RunScan,
   RunScanProgress,
+  RunScanTree,
   RunStarted,
 } from "./bindings";
 
@@ -52,6 +56,23 @@ export function onRunProgress(cb: (e: RunProgress) => void): Promise<UnlistenFn>
 export function onRunScanProgress(cb: (e: RunScanProgress) => void): Promise<UnlistenFn> {
   return listen<unknown>("run://scan-progress", (e) => {
     const parsed = zRunScanProgress.safeParse(e.payload);
+    if (parsed.success) cb(parsed.data);
+  });
+}
+
+/** Live, shallow per-folder scan activity (~ticker cadence; only when enabled). */
+export function onRunScanTree(cb: (e: RunScanTree) => void): Promise<UnlistenFn> {
+  return listen<unknown>("run://scan-tree", (e) => {
+    const parsed = zRunScanTree.safeParse(e.payload);
+    if (parsed.success) cb(parsed.data);
+  });
+}
+
+/** Live planning-phase progress (post-scan disk probes); only fires while the
+ * planning phase is running (total > 0). */
+export function onRunPlanProgress(cb: (e: RunPlanProgress) => void): Promise<UnlistenFn> {
+  return listen<unknown>("run://plan-progress", (e) => {
+    const parsed = zRunPlanProgress.safeParse(e.payload);
     if (parsed.success) cb(parsed.data);
   });
 }

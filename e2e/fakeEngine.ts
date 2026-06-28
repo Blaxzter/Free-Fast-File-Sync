@@ -443,13 +443,20 @@ export function installFakeEngine(scenarioName: string): void {
         }
 
         case "get_settings":
-          return { scan_threads: 0, mtime_gran_ms: 0, scan_ticker_ms: 120, log_level: "info" };
+          return {
+            scan_threads: 0,
+            mtime_gran_ms: 0,
+            scan_ticker_ms: 120,
+            scan_tree_depth: 1,
+            log_level: "info",
+          };
         case "save_settings":
           return (
             (a.settings as Record<string, unknown>) ?? {
               scan_threads: 0,
               mtime_gran_ms: 0,
               scan_ticker_ms: 120,
+              scan_tree_depth: 1,
               log_level: "info",
             }
           );

@@ -8,6 +8,7 @@
  * The per-row pair id comes from the PreviewJobResult wrapper (this component's
  * `pairId` prop), never from a field on PlanItem. */
 
+import { rootTail } from "../../domain/job";
 import { DELETION_MEANING } from "../../domain/meaning";
 import { visibleItems } from "../../domain/plan";
 import type { PairPreview, Resolution, SyncMode } from "../../ipc/bindings";
@@ -35,11 +36,6 @@ interface Props {
   onResolve: (path: string, r: Resolution) => void;
   bigDeleteConfirmed: boolean;
   onConfirmBigDelete: (v: boolean) => void;
-}
-
-function rootTail(path: string): string {
-  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
-  return parts[parts.length - 1] || path;
 }
 
 export function PairSection({

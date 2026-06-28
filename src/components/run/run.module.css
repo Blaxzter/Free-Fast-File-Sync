@@ -109,10 +109,14 @@
   background: var(--bg-surface-2);
   overflow: hidden;
 }
+/* Accent fill for the apply header bar (rendered inside the shared <Bar> track,
+ * so it scales via transform like the folder fills). */
 .runStripFill {
-  height: 100%;
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
   background: var(--accent);
-  transition: width 0.15s linear;
+  transition: transform 0.2s linear;
 }
 .runStripMono {
   font-family: var(--font-mono);
@@ -123,4 +127,121 @@
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 50%;
+}
+
+/* ---- Live apply-phase folder-activity tree (ProgressTree) ---- */
+.progressTree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+}
+.progressTreeHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+
+.folderList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+}
+.folderGlyph {
+  flex: 0 0 14px;
+  text-align: center;
+  font-size: var(--fs-xs);
+}
+/* Fixed-width name column so every bar starts at the SAME x (no ragged edges). */
+.folderName {
+  flex: 0 0 13rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folderTrack {
+  position: relative;
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface-2);
+  overflow: hidden;
+}
+/* Scale via transform (GPU-composited, no layout) so many bars animate cheaply. */
+.folderFill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: currentColor;
+  transition: transform 0.2s linear;
+}
+.folderCount {
+  flex: 0 0 5rem;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  font-size: var(--fs-mono-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Status drives the row colour; the fill inherits it via currentColor. */
+.folderActive {
+  color: var(--accent);
+}
+.folderActive .folderName {
+  font-weight: 600;
+}
+.folderDone {
+  color: var(--ok-fg);
+}
+.folderPending {
+  color: var(--text-muted);
+}
+.folderPending .folderName {
+  color: var(--text-secondary);
+}
+
+/* Per-pair rows in the multi-pair run list (same row shape as folders). */
+.pairActive {
+  color: var(--accent);
+}
+.pairActive .folderName {
+  font-weight: 600;
+}
+.pairDone {
+  color: var(--ok-fg);
+}
+.pairPending {
+  color: var(--text-muted);
+}
+.pairPending .folderName {
+  color: var(--text-secondary);
+}
+.pairAborted {
+  color: var(--warn-fg);
+}
+/* The active pair's folder tree, indented one level under its pair row. */
+.folderRowNested {
+  padding-left: 2.2rem;
+}
+/* Fills the bar column on pair rows (which have no inline bar) so the count
+ * column stays aligned with the folder rows below. */
+.pairSpacer {
+  flex: 1;
 }
