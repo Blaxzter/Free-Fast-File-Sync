@@ -2,13 +2,16 @@
  * store directly (no IPC) and asserts the scanning branch renders the folder
  * snapshot; the apply branch is covered by JobDetail.test.tsx. */
 
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useStore } from "../../app/store";
 import { ProgressTree } from "./ProgressTree";
 
 beforeEach(() => useStore.getState().resetRun());
-afterEach(() => useStore.getState().resetRun());
+// act() because this runs BEFORE RTL unmounts the tree: clearing the run mirror
+// re-renders the still-mounted ProgressTree (its store subscription flips to
+// idle), and that update must settle inside act().
+afterEach(() => act(() => useStore.getState().resetRun()));
 
 describe("ProgressTree", () => {
   it("renders all pairs with the active one expanded to its folder tree", () => {

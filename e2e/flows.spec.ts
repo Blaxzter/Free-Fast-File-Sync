@@ -177,4 +177,66 @@ test.describe("Tier-1 mocked-IPC flows", () => {
       )
       .toBe(true);
   });
+
+  test("scan-phase progress tree shows live per-folder scan activity", async ({ page }) => {
+    await gotoScenario(page, "scan-progress");
+    await openJob(page);
+    await compareBtn(page).click();
+
+    // The preview hangs mid-scan: the live run progress tree is up with the scan
+    // heading, the running item count, and the per-folder scan activity rows.
+    const region = page.getByLabel("run progress");
+    await expect(region).toBeVisible();
+    await expect(region).toContainText(/Scanning/);
+    await expect(region).toContainText("1,280 items");
+    await expect(region.getByText("src", { exact: true })).toBeVisible();
+    await expect(region.getByText("docs", { exact: true })).toBeVisible();
+
+    // Cancel releases the hung scan -> the tree disappears (mirror back to idle).
+    await cancelBtn(page).click();
+    await expect(page.getByLabel("run progress")).toHaveCount(0);
+  });
+
+  test("planning phase shows a determinate 'checking files' readout", async ({ page }) => {
+    await gotoScenario(page, "plan-progress");
+    await openJob(page);
+    await compareBtn(page).click();
+
+    // The preview hangs in the post-scan disk-probe sub-phase: a determinate
+    // "checking N/M files" readout instead of a silent freeze.
+    const region = page.getByLabel("run progress");
+    await expect(region).toBeVisible();
+    await expect(region).toContainText(/Planning/);
+    await expect(region).toContainText("checking 40/100 files");
+    // The scan folder tree persists through planning.
+    await expect(region.getByText("src", { exact: true })).toBeVisible();
+
+    await cancelBtn(page).click();
+    await expect(page.getByLabel("run progress")).toHaveCount(0);
+  });
+
+  test("apply-phase progress tree breaks activity down per folder", async ({ page }) => {
+    await gotoScenario(page, "apply-progress");
+    await openJob(page);
+    await compareBtn(page).click();
+
+    // Compare completes normally -> the plan grid + Apply are ready.
+    await expect(applyBtn(page)).toBeEnabled();
+    await applyBtn(page).click();
+
+    // The apply hangs mid-run: the folder breakdown shows src fully done (2/2)
+    // and docs still pending (0/1), under the "Applying pair 1/1" heading.
+    const region = page.getByLabel("run progress");
+    await expect(region).toBeVisible();
+    await expect(region).toContainText("Applying pair 1/1");
+    await expect(region.getByText("src", { exact: true })).toBeVisible();
+    await expect(region).toContainText("2/2");
+    await expect(region.getByText("docs", { exact: true })).toBeVisible();
+    await expect(region).toContainText("0/1");
+
+    // Cancel returns the mirror to idle and re-enables Compare.
+    await cancelBtn(page).click();
+    await expect(page.getByLabel("run progress")).toHaveCount(0);
+    await expect(compareBtn(page)).toBeEnabled();
+  });
 });
