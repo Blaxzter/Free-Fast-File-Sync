@@ -12,8 +12,11 @@ use crate::model::*;
 use crate::plan::{build_plan, PlanInputs, PlanProgress};
 use crate::scan::{scan_root_counted, ScanTree};
 use std::collections::HashMap;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// mtime comparison tolerance. 10ms absorbs serialization jitter without masking
 /// a genuine edit (which essentially always also changes size). Cross-filesystem
@@ -55,10 +58,57 @@ pub fn baseline_status(baseline_path: &Path) -> BaselineStatusKind {
     load_baseline(baseline_path).1
 }
 
+/// SMB port. A reachable file server accepts a TCP connection here immediately
+/// (even with its disks asleep), while a powered-off / disconnected host does not.
+const REACHABILITY_PORT: u16 = 445;
+/// Fast-fail deadline for the reachability probe. A live host answers well under
+/// this; a dead host would otherwise hang the OS's ~21s SMB connect timeout.
+const REACHABILITY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Can we open a TCP connection to `host:port` within `timeout`? Name resolution +
+/// connect run on a worker thread bounded by a deadline, so an unreachable host
+/// returns `false` in ~`timeout` rather than blocking. `true` means it answered
+/// (the subsequent `is_dir` then handles any disk spin-up normally).
+fn host_reachable(host: &str, port: u16, timeout: Duration) -> bool {
+    let host = host.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = (host.as_str(), port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.find_map(|a| TcpStream::connect_timeout(&a, timeout).ok()))
+            .is_some();
+        let _ = tx.send(ok);
+    });
+    // Bound our wait even if name resolution itself hangs (a dead NetBIOS name).
+    rx.recv_timeout(timeout + Duration::from_secs(1))
+        .unwrap_or(false)
+}
+
+/// For a remote (UNC) root, fail fast with a clear message when its host doesn't
+/// answer, instead of letting the following `is_dir()` block on the OS's ~21s SMB
+/// connect timeout. Local roots (no UNC host) are a no-op.
+fn check_reachable(root: &Path) -> Result<()> {
+    if let Some(host) = crate::pathutil::unc_host(root) {
+        if !host_reachable(&host, REACHABILITY_PORT, REACHABILITY_TIMEOUT) {
+            return Err(SyncError::InvalidJob(format!(
+                "network host '{host}' is unreachable (no response within {}s) — is the NAS / \
+                 network drive powered on and connected?",
+                REACHABILITY_TIMEOUT.as_secs()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_job(cfg: &JobConfig) -> Result<()> {
     if cfg.root_a.as_os_str().is_empty() || cfg.root_b.as_os_str().is_empty() {
         return Err(SyncError::InvalidJob("both folders must be set".into()));
     }
+    // Fast-fail on an unreachable remote host BEFORE the ~21s blocking is_dir, so
+    // an offline NAS surfaces a clear error in ~3s instead of a long silent hang.
+    check_reachable(&cfg.root_a)?;
+    check_reachable(&cfg.root_b)?;
     if !cfg.root_a.is_dir() {
         return Err(SyncError::InvalidJob(format!(
             "folder A does not exist: {}",
@@ -327,6 +377,36 @@ mod tests {
     fn run(cfg: &JobConfig, state: &Path) -> ApplyReport {
         let cancel = AtomicBool::new(false);
         execute(cfg, &bp(state), &HashMap::new(), true, &cancel, |_| {}).unwrap()
+    }
+
+    #[test]
+    fn host_reachable_true_for_a_live_listener() {
+        // A bound listener answers the TCP handshake immediately (even without
+        // accept()), so a short timeout still reports reachable.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(host_reachable(
+            "127.0.0.1",
+            port,
+            Duration::from_millis(500)
+        ));
+    }
+
+    #[test]
+    fn host_reachable_false_and_fast_for_an_unroutable_host() {
+        // 192.0.2.1 is TEST-NET-1 (RFC 5737): guaranteed unroutable => no answer.
+        // The probe must give up at ~the timeout, not the OS's multi-second default.
+        let start = std::time::Instant::now();
+        assert!(!host_reachable(
+            "192.0.2.1",
+            REACHABILITY_PORT,
+            Duration::from_millis(300)
+        ));
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "reachability probe must fail fast, took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

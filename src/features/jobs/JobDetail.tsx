@@ -23,6 +23,7 @@ import { directionMode, effectiveDeletion, effectiveDirection } from "../../doma
 import type { PlanSummary } from "../../domain/plan";
 import { defaultResolutions, unresolvedConflicts } from "../../domain/plan";
 import type { PairPreview, PreviewJobResult, Resolution } from "../../ipc/bindings";
+import { errorMessage } from "../../ipc/errors";
 import { cancelRun as cancelRunCmd, useExecuteJob, usePreviewJob } from "../../ipc/mutations";
 import { useJob } from "../../ipc/queries";
 import compare from "./compare.module.css";
@@ -141,11 +142,18 @@ export function JobDetail({ jobId }: { jobId: string }) {
   const isBusy = phase !== "idle" || preview.isPending || execute.isPending;
 
   const onPreview = async () => {
-    const res = await preview.mutateAsync({ jobId });
-    setResult(res);
-    setResolutions(seedResolutions(res.pairs));
-    setBigDeleteConfirmed({});
-    setCollapsed({});
+    try {
+      const res = await preview.mutateAsync({ jobId });
+      setResult(res);
+      setResolutions(seedResolutions(res.pairs));
+      setBigDeleteConfirmed({});
+      setCollapsed({});
+    } catch {
+      // Validation/scan failed — e.g. an offline NAS root (root_b.is_dir() times
+      // out then reports "folder does not exist"), an unreadable folder, or Busy.
+      // The mutation enters its error state and the danger Banner below surfaces
+      // the message; swallow here so it isn't an unhandled rejection.
+    }
   };
 
   const onApply = async () => {
@@ -233,6 +241,10 @@ export function JobDetail({ jobId }: { jobId: string }) {
         pairLabels={pairLabels}
         pairOrder={pairOrder}
       />
+
+      {preview.isError && (
+        <Banner intent="danger">Compare failed — {errorMessage(preview.error)}</Banner>
+      )}
 
       {unconfirmedBigDelete.length > 0 && (
         <Banner intent="warn">

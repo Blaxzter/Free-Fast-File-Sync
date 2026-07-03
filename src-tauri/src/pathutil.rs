@@ -36,6 +36,25 @@ pub fn case_fold(key: &str) -> String {
     key.to_lowercase()
 }
 
+/// The server name of a UNC path (`\\HOST\share\...`, or the extended
+/// `\\?\UNC\HOST\...`), or `None` for a local/relative path. Used to fast-probe
+/// network reachability before a blocking `is_dir()` on a remote root. Pure
+/// string parse (no IO), so it works — and is testable — on any platform.
+pub fn unc_host(path: &Path) -> Option<String> {
+    let s = path.to_string_lossy().replace('/', "\\");
+    let rest = s
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| s.strip_prefix(r"\\"))?;
+    let host = rest.split('\\').next()?.trim();
+    // Exclude the extended-length LOCAL prefix `\\?\C:\...` (first segment "?")
+    // and any empty/degenerate host.
+    if host.is_empty() || host == "?" || host == "." {
+        None
+    } else {
+        Some(host.to_string())
+    }
+}
+
 /// On Windows, prefix with the extended-length namespace when the resulting path
 /// risks exceeding MAX_PATH (260). Leaves short/relative paths untouched so the
 /// common case is unaffected.
@@ -128,6 +147,26 @@ mod tests {
         let p = os_path(root, "a/b/c.txt");
         assert!(p.ends_with("c.txt"));
         assert!(p.starts_with(root));
+    }
+
+    #[test]
+    fn unc_host_extracts_server_or_none() {
+        assert_eq!(
+            unc_host(Path::new(r"\\NAS\home\Screenshots")).as_deref(),
+            Some("NAS")
+        );
+        assert_eq!(
+            unc_host(Path::new(r"\\?\UNC\NAS\home\x")).as_deref(),
+            Some("NAS")
+        );
+        assert_eq!(
+            unc_host(Path::new(r"\\FabrahamHomeNAS\home")).as_deref(),
+            Some("FabrahamHomeNAS")
+        );
+        // Local paths (incl. the extended-length local prefix) have no UNC host.
+        assert_eq!(unc_host(Path::new(r"C:\Users\me")), None);
+        assert_eq!(unc_host(Path::new(r"\\?\C:\Users\me")), None);
+        assert_eq!(unc_host(Path::new("relative/path")), None);
     }
 
     #[cfg(windows)]
