@@ -218,3 +218,38 @@ See the structured `roadmap` field. Summary: **Phase 0** scaffolds the typed she
 **Planned conflict-UX enhancements** (see DESIGN.md → *Conflict Resolution* (7), not built in Phase 0): (a) a **"peek both" side-by-side / diff preview** for text conflicts — read-side command `get_preview_content` + client-side diff, capability-gated via the backend's `can_preview`, lands with Phase 1 (polish in Phase 2); (b) a **standing `conflict_policy`** ("always resolve as X", scopes global→job→pair) that pre-fills the `resolutions` map with HARD carve-outs (StateDesync and big-delete never auto-resolve) — per-job in Phase 1, the unattended/scheduled projection in Phase 2. Both reuse existing engine primitives (`resolution_options`/`default_resolution`/the resolutions map); neither touches `reconcile()`.
 
 **Key invariants for the engineer:** (1) only `ipc/commands.ts`/`events.ts` may call `invoke`/`listen`. (2) Every run — manual, watch, schedule, remote — goes through `preview_job → execute_job` so delete-suppression, big-delete gate, and baseline trust apply once, everywhere. (3) The reconcile 25-cell truth table is sacred; mirror/update are a post-filter on `Decision`, never a fork of `reconcile()`. (4) Colors come only from `domain/meaning.ts` keyed by the serde enum string — never hardcoded in components.
+
+---
+
+### 8. Live progress visualization — folder-activity tree (planned)
+
+Today's run feedback is two thin strips fed off a single "latest event" mirror: the bottom `StatusStrip.tsx` (scan = indeterminate sweep + `{scanned} items` count; apply = `done/total` bar + current path) and an apply-only run strip in `JobDetail.tsx:220-239`. During the **scan** of a large tree the user gets only a bare integer counter — no sense of *where* the walk is. This section plans a richer, folder-aware progress surface.
+
+**Design decision — it is its own surface, always-on; the diff grid stays flat (no toggle).** The "a tree must be an optional grouping toggle only" rule (DESIGN.md "Flat grid first", §1 stack table line 16) is about the **diff/plan view** (`PlanGrid`) — replacing the flat, sortable, filterable list of *what will change* with a tree is the thing that drew FreeFileSync backlash. A **progress visualization** is a different surface with no flat-grid incumbent to protect, so a folder tree is allowed there as an always-visible panel. Therefore: leave `components/plan/PlanGrid.tsx` untouched (flat), and add a separate `components/run/ProgressTree.tsx` shown during a run. A toggle would only be needed if we later also grouped the *diff rows* by directory — an explicitly out-of-scope, optional extension.
+
+**Reality the visual must respect:** the scan walker is multi-threaded (`scan.rs:163`, `WalkBuilder::build_parallel`), so during scan there is no single "current folder" — there are N. The honest scan visual is **top-level folders with live counts ticking up** (active branches pulse), not a single "you are here" cursor. During **apply**, items run sequentially within a pair, so an apply-phase current-path cursor is meaningful.
+
+**Shared data model (presentational, like `PlanGrid` — NOT a Radix component; status colors come from `domain/meaning.ts`):**
+```ts
+interface TreeNode {
+  path: string; name: string; depth: number;
+  status: "pending" | "active" | "done";
+  count: number;        // scanned entries (scan) or applied items (apply)
+  total?: number;       // known only in apply (from the preview plan)
+}
+```
+Capped to the top N levels (`scan_tree_depth` setting below); deeper paths roll up into their top-level ancestor.
+
+**Phase A — apply-phase tree (frontend-only, zero Rust; ships first).** All inputs already exist: the full folder structure is in the preview (`result.pairs[].plan.items[].path`, schema `zPlanItem.path`), and the live cursor + counts already stream via `run://progress { path, done, total, pair_index }` (`lib.rs:516-530`), mirrored in `store.ts` as `runMirror.progress`. Work: (1) a pure `buildFolderTree(items, depth)` helper grouping `PlanItem.path` by top-level prefix with per-folder applicable (non-noop) counts — Vitest-unit-testable; (2) as `runMirror.progress.path` streams, mark its top-level ancestor `active` and tick its `done`; (3) `ProgressTree.tsx` mounted in `JobDetail` in place of the lines 220-239 strip. No new events, schemas, or backend.
+
+**Phase B — scan-phase live folder activity (needs Rust; the black-box part). Chosen approach: B2, a top-level count map.** Maintain a small concurrent map keyed by the **top 1–2 path segments** (bounded cardinality — this is what keeps the hot loop cheap), incremented once per recorded entry at `scan.rs:252` alongside the existing `scanned.fetch_add`. The existing ticker thread (`lib.rs:330-342`) snapshots it per tick into a **new `run://scan-tree { run_id, folders: [{ path, count }] }`** event. (The cheaper rejected alternative was a single "most-recent folder" slot — near-zero cost but jittery and not a real tree.)
+
+Plumbing (mirrors how `scanned: &AtomicU64` is already threaded end-to-end):
+- Backend: `scan_root_counted` (`scan.rs:113`) gains a `tree: Option<&ScanTree>` param; same for `scan_both_counted`/`preview_counted_stats`/`execute_counted_stats` (`engine.rs`). `ScanTree` (an `Arc<sharded map>`) is created next to `scanned` (`lib.rs:323`) and snapshotted in the ticker. New `RunScanTree` struct near `RunScanProgress` (`lib.rs:224-228`).
+- Frontend contract (the obligatory hops): `ipc/bindings.ts` (`RunScanTree` type) → `domain/schemas.ts` (`zRunScanTree`, parsed at boundary) → `ipc/events.ts` (`onRunScanTree`, the only place `listen` is added) → `app/store.ts` (`RunMirror.scanTree` field + `applyRunScanTree` reducer wired in `subscribeRunEvents`).
+
+**⚠ Performance guard:** `scan.rs:252` is the hot loop tuned after the large-scan NAS crash. Keying the map on only the top segment(s) keeps it tiny and low-contention; this MUST be benchmarked (`examples/scanbench.rs`, `scripts/profile/`) before merge — it is the one place this feature could regress scan throughput.
+
+**Settings knob (project rule "surface every configurable"):** add `scan_tree_depth: usize` to `settings.rs` (`#[serde(default)]`, `0` = feature off) — caps both backend map cardinality and frontend render depth; surfaced in `features/settings/SettingsGeneral.tsx` and added to `zSettings`/`bindings.ts`. Cadence reuses the existing `scan_ticker_ms` (`settings.rs:30`) — no second timing knob.
+
+**Roadmap fit:** Phase A folds into the **Phase 1** "rebuild Preview/Run/Conflicts as real components" work. Phase B is a companion to the **Phase 2** scan-event/Watch work (it extends the existing `run://scan` "so the loading state isn't a black box" intent from a counter to a tree). **Build order:** A (frontend-only, immediate) → B backend (`ScanTree` + `run://scan-tree` + benchmark) → wire B into `ProgressTree` + the `scan_tree_depth` setting → polish (pulse-on-active via meaning tokens). **Tests:** Rust unit on the prefix-count map + ticker emit, extend `tests/multi_pair.rs`; Vitest on `buildFolderTree` and the store reducers; `e2e/fakeEngine.ts` emits `run://scan-tree` + `run://progress` to drive `pnpm e2e:mocked`.

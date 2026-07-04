@@ -1,0 +1,21 @@
+/* At-rest job overview (JobOverview): a job-level summary line + per-pair cards. */
+
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+}
+
+.summaryItem {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+}

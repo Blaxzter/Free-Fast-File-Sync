@@ -25,6 +25,7 @@ import type {
   PlanItem,
   PlanSummary,
   PreviewJobResult,
+  ScanTreeFolder,
   SyncPlan,
 } from "../src/ipc/bindings";
 
@@ -218,6 +219,15 @@ interface Scenario {
   /** When true, the apply emits progress events then PAUSES (never finishes) so
    * the cancel flow can interrupt it; cancel_run then emits run://finished. */
   applyHangsForCancel?: boolean;
+  /** When set, preview_job emits the scan-phase events (scan → scan-progress →
+   * scan-tree, plus plan-progress when `plan` is present) and then HANGS the way a
+   * long scan does, so the live progress tree can be asserted. cancel_run releases
+   * it exactly as the real engine returns Cancelled. */
+  previewScan?: {
+    scanned: number;
+    folders: ScanTreeFolder[];
+    plan?: { done: number; total: number };
+  };
 }
 
 function pairPreview(pl: SyncPlan): PairPreview {
@@ -333,6 +343,55 @@ function buildScenario(name: string): Scenario {
       };
     }
 
+    // Scan-phase progress: preview HANGS mid-scan after emitting the live
+    // per-folder scan activity, so the ProgressTree scan view is assertable.
+    case "scan-progress": {
+      const items = [copyItem("src/a.txt"), copyItem("docs/b.txt")];
+      return {
+        job: job("Scan progress job"),
+        baseline: "Present",
+        preview: { run_id: RUN_PREVIEW, pairs: [pairPreview(plan({ items }))] },
+        apply: { run_id: RUN_APPLY, pairs: [{ pair_id: PAIR_ID, report: report(items) }] },
+        previewScan: {
+          scanned: 1280,
+          folders: [
+            { path: "src", count: 900 },
+            { path: "docs", count: 380 },
+          ],
+        },
+      };
+    }
+
+    // Planning phase: preview HANGS in the post-scan disk-probe sub-phase, so the
+    // determinate "checking N/M files" readout is assertable.
+    case "plan-progress": {
+      const items = [copyItem("src/a.txt")];
+      return {
+        job: job("Plan progress job"),
+        baseline: "Present",
+        preview: { run_id: RUN_PREVIEW, pairs: [pairPreview(plan({ items }))] },
+        apply: { run_id: RUN_APPLY, pairs: [{ pair_id: PAIR_ID, report: report(items) }] },
+        previewScan: {
+          scanned: 2048,
+          folders: [{ path: "src", count: 2048 }],
+          plan: { done: 40, total: 100 },
+        },
+      };
+    }
+
+    // Apply-phase folder tree: Compare completes normally, then the apply HANGS
+    // mid-run (src fully done, docs pending) so the per-folder breakdown shows.
+    case "apply-progress": {
+      const items = [copyItem("src/a.txt"), copyItem("src/b.txt"), copyItem("docs/c.txt")];
+      return {
+        job: job("Apply progress job"),
+        baseline: "Present",
+        preview: { run_id: RUN_PREVIEW, pairs: [pairPreview(plan({ items }))] },
+        apply: { run_id: RUN_APPLY, pairs: [{ pair_id: PAIR_ID, report: report(items) }] },
+        applyHangsForCancel: true,
+      };
+    }
+
     default:
       // Unknown scenario -> behave like converge so the harness never blanks.
       return buildScenario("converge");
@@ -345,11 +404,20 @@ async function emitStarted(runId: string, jobId: string, pairCount: number, trig
   await emit("run://started", { run_id: runId, job_id: jobId, pair_count: pairCount, trigger });
 }
 
-async function emitApplyProgress(runId: string, plan: SyncPlan) {
+async function emitScan(runId: string, phase: "preview" | "apply") {
+  await emit("run://scan", { run_id: runId, pair_id: PAIR_ID, phase });
+}
+
+/** Emit the apply-phase scan marker, then one run://progress per applied item for
+ * the first `count` applicable items (each carries the running `done` count).
+ * `count < applicable.length` leaves the apply visibly in-flight (for the hung
+ * cancel / apply-progress scenarios). */
+async function emitApplyProgress(runId: string, plan: SyncPlan, count: number) {
   const applicable = plan.items.filter((i) => i.action !== "Noop");
+  const n = Math.min(count, applicable.length);
   const total = Math.max(applicable.length, 1);
-  await emit("run://scan", { run_id: runId, pair_id: PAIR_ID, phase: "apply" });
-  for (let i = 0; i < applicable.length; i += 1) {
+  await emitScan(runId, "apply");
+  for (let i = 0; i < n; i += 1) {
     await emit("run://progress", {
       run_id: runId,
       pair_id: PAIR_ID,
@@ -365,10 +433,20 @@ async function emitApplyProgress(runId: string, plan: SyncPlan) {
 
 // ---- the single registration entrypoint ----
 
-let cancelArmed = false;
-/** When an apply is hung (cancel scenario), this rejects the pending execute_job
- * promise the way the real engine returns RunError::Cancelled on cancel_run. */
-let rejectHungApply: ((reason: unknown) => void) | undefined;
+/** The active run id of a HUNG preview/apply (so cancel_run frees the right run
+ * mirror), and the rejecter that settles its pending promise the way the real
+ * engine returns RunError::Cancelled on cancel_run. */
+let armedRunId: string | undefined;
+let rejectHungRun: ((reason: unknown) => void) | undefined;
+
+/** Leave the command's promise PENDING (a long scan / apply that never finishes
+ * on its own); cancel_run releases it. */
+function hangRun<T>(runId: string): Promise<T> {
+  armedRunId = runId;
+  return new Promise<T>((_resolve, reject) => {
+    rejectHungRun = reject;
+  });
+}
 
 export function installFakeEngine(scenarioName: string): void {
   const sc = buildScenario(scenarioName);
@@ -396,6 +474,26 @@ export function installFakeEngine(scenarioName: string): void {
           previewed = true;
           // The real backend emits run://started for the held preview run.
           await emitStarted(result.run_id, JOB_ID, result.pairs.length, "manual");
+          if (sc.previewScan) {
+            const ps = sc.previewScan;
+            // Stream the live scan-phase feed, then HANG like a long scan so the
+            // ProgressTree scan/plan view can be asserted; cancel_run releases it.
+            await emitScan(result.run_id, "preview");
+            await emit("run://scan-progress", { run_id: result.run_id, scanned: ps.scanned });
+            await emit("run://scan-tree", {
+              run_id: result.run_id,
+              pair_id: PAIR_ID,
+              folders: ps.folders,
+            });
+            if (ps.plan) {
+              await emit("run://plan-progress", {
+                run_id: result.run_id,
+                done: ps.plan.done,
+                total: ps.plan.total,
+              });
+            }
+            return hangRun<PreviewJobResult>(result.run_id);
+          }
           return result;
         }
 
@@ -403,53 +501,48 @@ export function installFakeEngine(scenarioName: string): void {
           const planForRun = sc.preview.pairs[0]!.plan;
           await emitStarted(sc.apply.run_id, JOB_ID, 1, "manual");
           if (sc.applyHangsForCancel) {
-            cancelArmed = true;
-            // Emit a couple of progress ticks, then leave the promise PENDING so
-            // the UI sits in "applying" until cancel_run releases it.
-            await emit("run://scan", { run_id: sc.apply.run_id, pair_id: PAIR_ID, phase: "apply" });
-            await emit("run://progress", {
-              run_id: sc.apply.run_id,
-              pair_id: PAIR_ID,
-              pair_index: 0,
-              pair_count: 1,
-              done: 1,
-              total: planForRun.items.length,
-              path: planForRun.items[0]!.path,
-              action: planForRun.items[0]!.action,
-            });
-            // Stays PENDING until cancel_run rejects it (RunError::Cancelled),
-            // mirroring the real engine; cancel_run also emits run://finished to
-            // free the live run mirror.
-            return new Promise<ExecuteJobResult>((_resolve, reject) => {
-              rejectHungApply = reject;
-            });
+            // Emit progress for all but the last item, then leave the promise
+            // PENDING so the UI sits in "applying" (folder tree in-flight) until
+            // cancel_run releases it (RunError::Cancelled), mirroring the real
+            // engine; cancel_run also emits run://finished to free the mirror.
+            await emitApplyProgress(sc.apply.run_id, planForRun, planForRun.items.length - 1);
+            return hangRun<ExecuteJobResult>(sc.apply.run_id);
           }
-          await emitApplyProgress(sc.apply.run_id, planForRun);
+          await emitApplyProgress(sc.apply.run_id, planForRun, planForRun.items.length);
           await emit("run://pair-done", { run_id: sc.apply.run_id, pair_id: PAIR_ID });
           await emit("run://finished", { run_id: sc.apply.run_id });
           return sc.apply;
         }
 
         case "cancel_run": {
-          const runId = (a.runId as string) ?? (a.run_id as string) ?? sc.apply.run_id;
-          if (cancelArmed) {
-            cancelArmed = false;
-            await emit("run://finished", { run_id: runId });
-            // Settle the hung execute_job the way the real engine does on cancel.
-            rejectHungApply?.({ Cancelled: { run_id: runId } });
-            rejectHungApply = undefined;
+          const runId =
+            (a.runId as string) ?? (a.run_id as string) ?? armedRunId ?? sc.apply.run_id;
+          if (rejectHungRun) {
+            // Free the live run mirror (applyRunFinished keys off the active run
+            // id), then settle the hung command the way the real engine does.
+            await emit("run://finished", { run_id: armedRunId ?? runId });
+            rejectHungRun({ Cancelled: { run_id: runId } });
+            rejectHungRun = undefined;
+            armedRunId = undefined;
           }
           return true;
         }
 
         case "get_settings":
-          return { scan_threads: 0, mtime_gran_ms: 0, scan_ticker_ms: 120, log_level: "info" };
+          return {
+            scan_threads: 0,
+            mtime_gran_ms: 0,
+            scan_ticker_ms: 120,
+            scan_tree_depth: 1,
+            log_level: "info",
+          };
         case "save_settings":
           return (
             (a.settings as Record<string, unknown>) ?? {
               scan_threads: 0,
               mtime_gran_ms: 0,
               scan_ticker_ms: 120,
+              scan_tree_depth: 1,
               log_level: "info",
             }
           );

@@ -9,11 +9,14 @@ use crate::config::JobConfig;
 use crate::error::{Result, SyncError};
 use crate::fsops;
 use crate::model::*;
-use crate::plan::{build_plan, PlanInputs};
-use crate::scan::scan_root_counted;
+use crate::plan::{build_plan, PlanInputs, PlanProgress};
+use crate::scan::{scan_root_counted, ScanTree};
 use std::collections::HashMap;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// mtime comparison tolerance. 10ms absorbs serialization jitter without masking
 /// a genuine edit (which essentially always also changes size). Cross-filesystem
@@ -55,10 +58,57 @@ pub fn baseline_status(baseline_path: &Path) -> BaselineStatusKind {
     load_baseline(baseline_path).1
 }
 
+/// SMB port. A reachable file server accepts a TCP connection here immediately
+/// (even with its disks asleep), while a powered-off / disconnected host does not.
+const REACHABILITY_PORT: u16 = 445;
+/// Fast-fail deadline for the reachability probe. A live host answers well under
+/// this; a dead host would otherwise hang the OS's ~21s SMB connect timeout.
+const REACHABILITY_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Can we open a TCP connection to `host:port` within `timeout`? Name resolution +
+/// connect run on a worker thread bounded by a deadline, so an unreachable host
+/// returns `false` in ~`timeout` rather than blocking. `true` means it answered
+/// (the subsequent `is_dir` then handles any disk spin-up normally).
+fn host_reachable(host: &str, port: u16, timeout: Duration) -> bool {
+    let host = host.to_string();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let ok = (host.as_str(), port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.find_map(|a| TcpStream::connect_timeout(&a, timeout).ok()))
+            .is_some();
+        let _ = tx.send(ok);
+    });
+    // Bound our wait even if name resolution itself hangs (a dead NetBIOS name).
+    rx.recv_timeout(timeout + Duration::from_secs(1))
+        .unwrap_or(false)
+}
+
+/// For a remote (UNC) root, fail fast with a clear message when its host doesn't
+/// answer, instead of letting the following `is_dir()` block on the OS's ~21s SMB
+/// connect timeout. Local roots (no UNC host) are a no-op.
+fn check_reachable(root: &Path) -> Result<()> {
+    if let Some(host) = crate::pathutil::unc_host(root) {
+        if !host_reachable(&host, REACHABILITY_PORT, REACHABILITY_TIMEOUT) {
+            return Err(SyncError::InvalidJob(format!(
+                "network host '{host}' is unreachable (no response within {}s) — is the NAS / \
+                 network drive powered on and connected?",
+                REACHABILITY_TIMEOUT.as_secs()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_job(cfg: &JobConfig) -> Result<()> {
     if cfg.root_a.as_os_str().is_empty() || cfg.root_b.as_os_str().is_empty() {
         return Err(SyncError::InvalidJob("both folders must be set".into()));
     }
+    // Fast-fail on an unreachable remote host BEFORE the ~21s blocking is_dir, so
+    // an offline NAS surfaces a clear error in ~3s instead of a long silent hang.
+    check_reachable(&cfg.root_a)?;
+    check_reachable(&cfg.root_b)?;
     if !cfg.root_a.is_dir() {
         return Err(SyncError::InvalidJob(format!(
             "folder A does not exist: {}",
@@ -91,10 +141,16 @@ type ScanBoth = (
     bool,
 );
 
-/// Scans both roots in parallel, threading a `scanned` counter into both walks so
-/// a caller can poll live progress. The returned bool is `true` when EITHER scan
-/// hit read errors — in that case deletions must be suppressed this run.
-fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
+/// Scans both roots in parallel, threading a `scanned` counter (and, when present,
+/// a shared `tree`) into both walks so a caller can poll live progress. Both roots
+/// share the same `tree`, so its per-folder counts are the merged A+B activity. The
+/// returned bool is `true` when EITHER scan hit read errors — in that case
+/// deletions must be suppressed this run.
+fn scan_both_counted(
+    cfg: &JobConfig,
+    scanned: &AtomicU64,
+    tree: Option<&ScanTree>,
+) -> Result<ScanBoth> {
     let (ra, rb) = rayon::join(
         || {
             scan_root_counted(
@@ -103,6 +159,7 @@ fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
                 cfg.verify_by_hash,
                 scanned,
                 cfg.scan_threads,
+                tree,
             )
         },
         || {
@@ -112,6 +169,7 @@ fn scan_both_counted(cfg: &JobConfig, scanned: &AtomicU64) -> Result<ScanBoth> {
                 cfg.verify_by_hash,
                 scanned,
                 cfg.scan_threads,
+                tree,
             )
         },
     );
@@ -162,7 +220,7 @@ pub fn preview_counted(
     baseline_path: &Path,
     scanned: &AtomicU64,
 ) -> Result<SyncPlan> {
-    preview_counted_stats(cfg, baseline_path, scanned).map(|(plan, _)| plan)
+    preview_counted_stats(cfg, baseline_path, scanned, None, None).map(|(plan, _)| plan)
 }
 
 /// Like [`preview_counted`], but also returns per-side [`ScanStats`] for the
@@ -173,10 +231,12 @@ pub fn preview_counted_stats(
     cfg: &JobConfig,
     baseline_path: &Path,
     scanned: &AtomicU64,
+    tree: Option<&ScanTree>,
+    plan_progress: Option<&PlanProgress>,
 ) -> Result<(SyncPlan, ScanStats)> {
     validate_job(cfg)?;
     let (base, status) = load_baseline(baseline_path);
-    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned, tree)?;
     let stats = ScanStats {
         entries_a: ra.entries.len(),
         entries_b: rb.entries.len(),
@@ -195,6 +255,7 @@ pub fn preview_counted_stats(
         gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
+        plan_progress,
     });
     Ok((plan, stats))
 }
@@ -236,7 +297,8 @@ pub fn execute_counted_stats(
     validate_job(cfg)?;
     let bpath = baseline_path.to_path_buf();
     let (mut base, status) = load_baseline(&bpath);
-    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned)?;
+    // Execute's re-scan has no live UI ticker, so no folder tree is threaded.
+    let (ra, rb, warnings, scan_error) = scan_both_counted(cfg, scanned, None)?;
     let stats = ScanStats {
         entries_a: ra.entries.len(),
         entries_b: rb.entries.len(),
@@ -255,6 +317,7 @@ pub fn execute_counted_stats(
         gran_ns: gran_ns(cfg),
         warnings,
         suppress_deletes: scan_error,
+        plan_progress: None,
     });
 
     if plan.big_delete.is_some() && !confirm_big_delete {
@@ -314,6 +377,36 @@ mod tests {
     fn run(cfg: &JobConfig, state: &Path) -> ApplyReport {
         let cancel = AtomicBool::new(false);
         execute(cfg, &bp(state), &HashMap::new(), true, &cancel, |_| {}).unwrap()
+    }
+
+    #[test]
+    fn host_reachable_true_for_a_live_listener() {
+        // A bound listener answers the TCP handshake immediately (even without
+        // accept()), so a short timeout still reports reachable.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(host_reachable(
+            "127.0.0.1",
+            port,
+            Duration::from_millis(500)
+        ));
+    }
+
+    #[test]
+    fn host_reachable_false_and_fast_for_an_unroutable_host() {
+        // 192.0.2.1 is TEST-NET-1 (RFC 5737): guaranteed unroutable => no answer.
+        // The probe must give up at ~the timeout, not the OS's multi-second default.
+        let start = std::time::Instant::now();
+        assert!(!host_reachable(
+            "192.0.2.1",
+            REACHABILITY_PORT,
+            Duration::from_millis(300)
+        ));
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "reachability probe must fail fast, took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

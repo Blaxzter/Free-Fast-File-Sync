@@ -9,7 +9,7 @@
  *
  * The per-row pair id comes from the PreviewJobResult wrapper, never PlanItem. */
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // @tanstack/react-virtual computes an empty viewport under jsdom (no real
@@ -324,30 +324,35 @@ describe("JobDetail", () => {
       await waitFor(() => expect(useStore.getState().activeRunId).toBe(RUN_ID));
 
       // A foreign run's progress must be dropped: no strip, no mirror mutation.
-      await emit("run://progress", {
-        run_id: "OTHER_RUN",
-        pair_id: "PAIR_0",
-        pair_index: 0,
-        pair_count: 2,
-        done: 3,
-        total: 10,
-        path: "ignored.txt",
-        action: "CopyAtoB",
+      // (act() flushes the event-driven store update so React state settles
+      // inside act — the emit re-renders the run-aware subscribers.)
+      await act(async () => {
+        await emit("run://progress", {
+          run_id: "OTHER_RUN",
+          pair_id: "PAIR_0",
+          pair_index: 0,
+          pair_count: 2,
+          done: 3,
+          total: 10,
+          path: "ignored.txt",
+          action: "CopyAtoB",
+        });
       });
-      await Promise.resolve();
       expect(useStore.getState().runs["OTHER_RUN"]).toBeUndefined();
       expect(screen.queryByLabelText("run progress")).toBeNull();
 
       // The active run's progress updates the mirror + renders the strip.
-      await emit("run://progress", {
-        run_id: RUN_ID,
-        pair_id: "PAIR_1",
-        pair_index: 1,
-        pair_count: 2,
-        done: 4,
-        total: 10,
-        path: "live.txt",
-        action: "DeleteB",
+      await act(async () => {
+        await emit("run://progress", {
+          run_id: RUN_ID,
+          pair_id: "PAIR_1",
+          pair_index: 1,
+          pair_count: 2,
+          done: 4,
+          total: 10,
+          path: "live.txt",
+          action: "DeleteB",
+        });
       });
       await waitFor(() => expect(useStore.getState().runs[RUN_ID]!.progress?.done).toBe(4));
       const strip = await screen.findByLabelText("run progress");

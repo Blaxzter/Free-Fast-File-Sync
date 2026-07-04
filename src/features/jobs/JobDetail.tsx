@@ -11,17 +11,19 @@
 import { Check, Play, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useStore } from "../../app/store";
+import { JobOverview } from "../../components/job/JobOverview";
 import { SummaryChips } from "../../components/plan/SummaryChips";
 import { Banner } from "../../components/primitives/Banner";
 import { Button } from "../../components/primitives/Button";
 import { PairSection } from "../../components/run/PairSection";
+import { ProgressTree } from "../../components/run/ProgressTree";
 import { RunReport } from "../../components/run/RunReport";
-import run from "../../components/run/run.module.css";
 import type { Job } from "../../domain/job";
 import { directionMode, effectiveDeletion, effectiveDirection } from "../../domain/job";
 import type { PlanSummary } from "../../domain/plan";
 import { defaultResolutions, unresolvedConflicts } from "../../domain/plan";
 import type { PairPreview, PreviewJobResult, Resolution } from "../../ipc/bindings";
+import { errorMessage } from "../../ipc/errors";
 import { cancelRun as cancelRunCmd, useExecuteJob, usePreviewJob } from "../../ipc/mutations";
 import { useJob } from "../../ipc/queries";
 import compare from "./compare.module.css";
@@ -106,6 +108,15 @@ export function JobDetail({ jobId }: { jobId: string }) {
     return map;
   }, [job]);
 
+  // Enabled pairs in scan order — drives the "Scanning pair N/M · label" heading
+  // (available from the Job during the scan, before any preview result exists).
+  const enabledPairs = useMemo(() => (job?.pairs ?? []).filter((p) => p.enabled), [job]);
+  const pairLabels = useMemo(
+    () => Object.fromEntries(enabledPairs.map((p) => [p.id, p.label])),
+    [enabledPairs],
+  );
+  const pairOrder = useMemo(() => enabledPairs.map((p) => p.id), [enabledPairs]);
+
   const summary = useMemo(() => aggregateSummary(pairs), [pairs]);
 
   // Apply gating: no unresolved conflicts anywhere, and every tripped
@@ -131,11 +142,18 @@ export function JobDetail({ jobId }: { jobId: string }) {
   const isBusy = phase !== "idle" || preview.isPending || execute.isPending;
 
   const onPreview = async () => {
-    const res = await preview.mutateAsync({ jobId });
-    setResult(res);
-    setResolutions(seedResolutions(res.pairs));
-    setBigDeleteConfirmed({});
-    setCollapsed({});
+    try {
+      const res = await preview.mutateAsync({ jobId });
+      setResult(res);
+      setResolutions(seedResolutions(res.pairs));
+      setBigDeleteConfirmed({});
+      setCollapsed({});
+    } catch {
+      // Validation/scan failed — e.g. an offline NAS root (root_b.is_dir() times
+      // out then reports "folder does not exist"), an unreadable folder, or Busy.
+      // The mutation enters its error state and the danger Banner below surfaces
+      // the message; swallow here so it isn't an unhandled rejection.
+    }
   };
 
   const onApply = async () => {
@@ -217,25 +235,15 @@ export function JobDetail({ jobId }: { jobId: string }) {
         )}
       </div>
 
-      {phase === "applying" && runMirror?.progress && (
-        <div className={run.runStrip} role="status" aria-label="run progress">
-          <span>
-            Applying pair {runMirror.activePairIndex + 1}/{runMirror.pairCount || 1}
-          </span>
-          <div className={run.runStripTrack}>
-            <div
-              className={run.runStripFill}
-              style={{
-                width: `${
-                  runMirror.progress.total
-                    ? (runMirror.progress.done / runMirror.progress.total) * 100
-                    : 0
-                }%`,
-              }}
-            />
-          </div>
-          <span className={run.runStripMono}>{runMirror.progress.path}</span>
-        </div>
+      <ProgressTree
+        pairs={pairs}
+        resolutions={resolutions}
+        pairLabels={pairLabels}
+        pairOrder={pairOrder}
+      />
+
+      {preview.isError && (
+        <Banner intent="danger">Compare failed — {errorMessage(preview.error)}</Banner>
       )}
 
       {unconfirmedBigDelete.length > 0 && (
@@ -245,10 +253,13 @@ export function JobDetail({ jobId }: { jobId: string }) {
         </Banner>
       )}
 
-      {pairs.length === 0 && !preview.isPending && (
-        <Banner intent="info">
-          Press Compare to scan this job&apos;s folder pairs and preview the changes.
-        </Banner>
+      {pairs.length === 0 && !preview.isPending && job && (
+        <>
+          <JobOverview jobId={jobId} job={job as Job} />
+          <Banner intent="info">
+            Press Compare to scan this job&apos;s folder pairs and preview the changes.
+          </Banner>
+        </>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>

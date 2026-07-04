@@ -105,6 +105,24 @@ export function localPath(e: EndpointPath): string {
   return e.kind === "Local" ? e.path : "";
 }
 
+/** Last path segment (folder name) of a path, for compact display. */
+export function rootTail(path: string): string {
+  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+/** Compact one-line summary of an ignore policy (e.g. ".gitignore · +12 globs"). */
+export function filterSummary(f: IgnorePolicy): string {
+  const parts: string[] = [];
+  if (f.use_gitignore) parts.push(".gitignore");
+  if (f.use_dot_ignore) parts.push(".ignore");
+  if (f.include_hidden) parts.push("hidden shown");
+  if (f.custom_globs.length > 0) {
+    parts.push(`+${f.custom_globs.length} glob${f.custom_globs.length === 1 ? "" : "s"}`);
+  }
+  return parts.length ? parts.join(" · ") : "no filters";
+}
+
 /** How a five-way SyncDirection collapses onto the engine axis. `swap` means
  * roots A/B are passed swapped so the engine only ever sees "A is source".
  * MIRROR of job.rs#resolve_pair — editor preview ONLY, never safety-critical. */

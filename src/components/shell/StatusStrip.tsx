@@ -1,4 +1,5 @@
 import { useStore } from "../../app/store";
+import { useNow } from "../../app/useNow";
 import { StatusDot } from "../primitives/StatusDot";
 import s from "./shell.module.css";
 
@@ -9,10 +10,33 @@ export function StatusStrip() {
   const progress = useStore((st) => st.run.progress);
   const scanned = useStore((st) => st.run.scanned);
   const startedAt = useStore((st) => st.run.startedAt);
+  const planDone = useStore((st) => st.run.planDone);
+  const planTotal = useStore((st) => st.run.planTotal);
+  // Local clock so elapsed + rate keep moving between (bursty) scan events.
+  const now = useNow(phase === "scanning");
 
   if (phase === "scanning") {
-    // Indeterminate (no known total mid-scan); show the live count + throughput.
-    const secs = startedAt ? (Date.now() - startedAt) / 1000 : 0;
+    // Post-scan disk-probe ("planning") sub-phase: the scan count is frozen, so
+    // show DETERMINATE "checking files" progress instead of looking stuck.
+    if (planTotal > 0) {
+      const pct = (planDone / planTotal) * 100;
+      return (
+        <footer className={s.statusStrip}>
+          <span className={s.statusItem}>
+            <StatusDot color="--watch-fg" live />
+            PLANNING
+          </span>
+          <div className={s.progressTrack}>
+            <div className={s.progressFill} style={{ width: `${pct}%` }} />
+          </div>
+          <span className={s.statusMono}>
+            checking {planDone.toLocaleString()}/{planTotal.toLocaleString()} files
+          </span>
+        </footer>
+      );
+    }
+    // Scanning: indeterminate (no known total mid-scan); live count + throughput.
+    const secs = startedAt ? (now - startedAt) / 1000 : 0;
     const rate = secs > 0.3 && scanned > 0 ? Math.round(scanned / secs) : 0;
     return (
       <footer className={s.statusStrip}>

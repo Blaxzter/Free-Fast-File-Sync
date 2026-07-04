@@ -11,12 +11,12 @@ use crate::model::{EntryKind, Meta};
 use crate::pathutil::nfc_key;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use ignore::{WalkBuilder, WalkState};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::Metadata;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::{Instant, UNIX_EPOCH};
 
 pub struct ScanResult {
@@ -68,6 +68,118 @@ pub fn resolve_scan_threads(requested: usize) -> usize {
     }
 }
 
+/// Live, shallow folder-activity tracker for the scan phase. The parallel walk
+/// bumps a per-folder count as each entry is recorded; the run layer's scan
+/// ticker polls [`snapshot`](ScanTree::snapshot) to drive the live folder tree in
+/// the UI.
+///
+/// Buckets are keyed by the first `depth` path segments (`depth == 1` => top-level
+/// folders), so cardinality is bounded to the breadth of the tree's SHALLOW levels
+/// — cheap to hold and to snapshot, and the dominant reason the per-entry cost
+/// stays negligible on the (already perf-tuned) scan hot loop. Sharded so that
+/// per-entry increment under many walker threads doesn't serialize on one lock.
+/// Distinct keys per shard are capped (overflow folds into the root bucket) so a
+/// pathologically deep `depth` can never grow the map without bound.
+pub struct ScanTree {
+    depth: usize,
+    shards: Vec<Mutex<HashMap<String, u64>>>,
+}
+
+/// Per-shard distinct-key cap (overflow folds into the root bucket).
+const SCAN_TREE_MAX_KEYS_PER_SHARD: usize = 256;
+/// Shard count — a small power of two; trades a little memory for far less lock
+/// contention on the hot loop. Snapshotting merges across all shards.
+const SCAN_TREE_SHARDS: usize = 16;
+
+impl ScanTree {
+    /// `depth` is the number of leading path segments to key on (clamped to >= 1).
+    pub fn new(depth: usize) -> ScanTree {
+        let mut shards = Vec::with_capacity(SCAN_TREE_SHARDS);
+        for _ in 0..SCAN_TREE_SHARDS {
+            shards.push(Mutex::new(HashMap::new()));
+        }
+        ScanTree {
+            depth: depth.max(1),
+            shards,
+        }
+    }
+
+    /// The bucket an entry contributes to: the first `depth` segments of the folder
+    /// it lives in (a file's PARENT dir; a directory entry ITSELF). Root-level files
+    /// map to `""`. Returns a borrow of `key` — no allocation on the hot path.
+    fn bucket<'a>(&self, key: &'a str, is_dir: bool) -> &'a str {
+        let dir_path: &str = if is_dir {
+            key
+        } else {
+            match key.rfind('/') {
+                Some(i) => &key[..i],
+                None => "",
+            }
+        };
+        if dir_path.is_empty() {
+            return "";
+        }
+        match dir_path.match_indices('/').nth(self.depth - 1) {
+            Some((i, _)) => &dir_path[..i],
+            None => dir_path,
+        }
+    }
+
+    /// Record one recorded entry under its bucket. One short lock on a single
+    /// shard; allocates only when first seeing a bucket. A poisoned lock is ignored
+    /// — live progress is non-critical and must never panic the scan.
+    pub fn record(&self, key: &str, is_dir: bool) {
+        let bucket = self.bucket(key, is_dir);
+        let shard = &self.shards[shard_index(bucket)];
+        if let Ok(mut map) = shard.lock() {
+            if let Some(c) = map.get_mut(bucket) {
+                *c += 1;
+            } else if map.len() < SCAN_TREE_MAX_KEYS_PER_SHARD {
+                map.insert(bucket.to_string(), 1);
+            } else {
+                *map.entry(String::new()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    /// Reset all per-folder counts. Called at each pair boundary so the live view
+    /// shows only the pair currently being scanned (scans run pair-sequentially).
+    pub fn clear(&self) {
+        for shard in &self.shards {
+            if let Ok(mut map) = shard.lock() {
+                map.clear();
+            }
+        }
+    }
+
+    /// Merge all shards into a count-descending list, capped to `max` folders.
+    /// Called only by the poller (~ticker cadence), so the merge cost is irrelevant.
+    pub fn snapshot(&self, max: usize) -> Vec<(String, u64)> {
+        let mut merged: HashMap<String, u64> = HashMap::new();
+        for shard in &self.shards {
+            if let Ok(map) = shard.lock() {
+                for (k, v) in map.iter() {
+                    *merged.entry(k.clone()).or_insert(0) += *v;
+                }
+            }
+        }
+        let mut folders: Vec<(String, u64)> = merged.into_iter().collect();
+        folders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        folders.truncate(max);
+        folders
+    }
+}
+
+/// Pick a shard for `key` via a tiny FNV-1a hash. Stable and allocation-free.
+fn shard_index(key: &str) -> usize {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    (h as usize) % SCAN_TREE_SHARDS
+}
+
 /// Per-thread accumulator. Every walker thread fills its OWN `Acc` (no shared
 /// lock), then ships it back over a channel exactly once when the thread's visitor
 /// is dropped (`Outbox::drop`). This replaces the previous shared `Mutex<Acc>` +
@@ -108,14 +220,17 @@ impl Drop for Outbox {
 /// Walk one root into a key→Meta map. Hashes are only computed when `hash_files`
 /// (verify-by-hash mode); otherwise change detection is metadata-based. `scanned`
 /// is bumped once per recorded entry so a caller on another thread can poll live
-/// scan progress (e.g. to emit a progress event). `threads` is the requested
-/// walker-thread count per root (`0` => the conservative auto default).
+/// scan progress (e.g. to emit a progress event). When `tree` is `Some`, each
+/// recorded entry is also tallied into its shallow folder bucket for the live
+/// folder-activity view. `threads` is the requested walker-thread count per root
+/// (`0` => the conservative auto default).
 pub fn scan_root_counted(
     root: &Path,
     policy: &IgnorePolicy,
     hash_files: bool,
     scanned: &AtomicU64,
     threads: usize,
+    tree: Option<&ScanTree>,
 ) -> Result<ScanResult> {
     if !root.is_dir() {
         return Err(SyncError::InvalidJob(format!(
@@ -240,6 +355,11 @@ pub fn scan_root_counted(
                     }
                 }
 
+                // Tally into the live folder tree BEFORE `key` is moved into the
+                // entry map; symmetric with the `scanned` counter below.
+                if let Some(t) = tree {
+                    t.record(&key, kind == EntryKind::Dir);
+                }
                 out.acc.entries.insert(
                     key,
                     Meta {
@@ -371,8 +491,15 @@ mod tests {
         fs::create_dir(root.join("build")).unwrap();
         fs::write(root.join("build").join("out.bin"), "x").unwrap();
 
-        let res = scan_root_counted(root, &IgnorePolicy::default(), false, &AtomicU64::new(0), 0)
-            .unwrap();
+        let res = scan_root_counted(
+            root,
+            &IgnorePolicy::default(),
+            false,
+            &AtomicU64::new(0),
+            0,
+            None,
+        )
+        .unwrap();
         assert!(res.entries.contains_key("keep.txt"));
         assert!(!res.entries.contains_key("ignored.txt"));
         assert!(!res.entries.keys().any(|k| k.starts_with("build")));
@@ -393,7 +520,7 @@ mod tests {
             custom_globs: vec!["*.log".into(), "!b.log".into()],
             ..Default::default()
         };
-        let res = scan_root_counted(root, &policy, false, &AtomicU64::new(0), 0).unwrap();
+        let res = scan_root_counted(root, &policy, false, &AtomicU64::new(0), 0, None).unwrap();
         assert!(!res.entries.contains_key("a.log"));
         assert!(res.entries.contains_key("b.log")); // re-included by negation
         assert!(res.entries.contains_key("c.txt"));
@@ -420,10 +547,66 @@ mod tests {
         fs::write(root.join("sub").join("c.txt"), "3").unwrap();
 
         let scanned = AtomicU64::new(0);
-        let res = scan_root_counted(root, &IgnorePolicy::default(), false, &scanned, 0).unwrap();
+        let res =
+            scan_root_counted(root, &IgnorePolicy::default(), false, &scanned, 0, None).unwrap();
         // Every recorded entry (files + the dir) bumps the counter exactly once.
         assert_eq!(scanned.load(Ordering::Relaxed) as usize, res.entries.len());
         assert!(res.entries.len() >= 4);
+    }
+
+    fn snap_map(tree: &ScanTree) -> HashMap<String, u64> {
+        tree.snapshot(64).into_iter().collect()
+    }
+
+    #[test]
+    fn scan_tree_buckets_by_top_level_folder() {
+        let tree = ScanTree::new(1);
+        tree.record("Photos/a.jpg", false); // file -> parent "Photos"
+        tree.record("Photos/2026/b.jpg", false); // deeper file -> still "Photos"
+        tree.record("Photos", true); // the dir entry itself -> "Photos"
+        tree.record("readme.txt", false); // root-level file -> ""
+        let map = snap_map(&tree);
+        assert_eq!(map.get("Photos").copied(), Some(3));
+        assert_eq!(map.get("").copied(), Some(1));
+    }
+
+    #[test]
+    fn scan_tree_depth_two_keys_two_segments() {
+        let tree = ScanTree::new(2);
+        tree.record("a/b/c.txt", false); // parent a/b -> "a/b"
+        tree.record("a/x.txt", false); // parent a (one segment) -> "a"
+        tree.record("a/b", true); // dir a/b -> "a/b"
+        let map = snap_map(&tree);
+        assert_eq!(map.get("a/b").copied(), Some(2));
+        assert_eq!(map.get("a").copied(), Some(1));
+    }
+
+    #[test]
+    fn scan_root_populates_tree_when_provided() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub").join("c.txt"), "3").unwrap();
+        fs::write(root.join("top.txt"), "1").unwrap();
+
+        let tree = ScanTree::new(1);
+        let scanned = AtomicU64::new(0);
+        scan_root_counted(
+            root,
+            &IgnorePolicy::default(),
+            false,
+            &scanned,
+            0,
+            Some(&tree),
+        )
+        .unwrap();
+        let map = snap_map(&tree);
+        // "sub" dir + "sub/c.txt" => 2 under "sub"; "top.txt" => 1 under root "".
+        assert_eq!(map.get("sub").copied(), Some(2));
+        assert_eq!(map.get("").copied(), Some(1));
+        // Tree total equals the scanned counter (same recorded-entry set).
+        let total: u64 = map.values().sum();
+        assert_eq!(total, scanned.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -457,15 +640,22 @@ mod tests {
             }
         }
 
-        let single =
-            scan_root_counted(root, &IgnorePolicy::default(), false, &AtomicU64::new(0), 1)
-                .unwrap();
+        let single = scan_root_counted(
+            root,
+            &IgnorePolicy::default(),
+            false,
+            &AtomicU64::new(0),
+            1,
+            None,
+        )
+        .unwrap();
         let many = scan_root_counted(
             root,
             &IgnorePolicy::default(),
             false,
             &AtomicU64::new(0),
             16,
+            None,
         )
         .unwrap();
 

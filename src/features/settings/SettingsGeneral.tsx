@@ -137,6 +137,25 @@ export function SettingsGeneral() {
                 How often the scanning item count updates (clamped 30–2000 ms).
               </span>
             </div>
+
+            <div className={s.field}>
+              <label className={s.fieldLabel} htmlFor="set-tree-depth">
+                Live folder-tree depth
+              </label>
+              <input
+                id="set-tree-depth"
+                type="number"
+                min={0}
+                max={8}
+                className={s.numInput}
+                value={form.scan_tree_depth}
+                onChange={(e) => set("scan_tree_depth", intField(e.target.value))}
+              />
+              <span className={s.fieldHint}>
+                Live per-folder activity shown while a job scans. 1 = top-level folders (default);
+                higher nests deeper; 0 = off.
+              </span>
+            </div>
           </div>
         )}
       </div>

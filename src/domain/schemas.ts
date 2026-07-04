@@ -167,6 +167,7 @@ export const zSettings = z.object({
   scan_threads: z.number().int().nonnegative(),
   mtime_gran_ms: z.number().int().nonnegative(),
   scan_ticker_ms: z.number().int().nonnegative(),
+  scan_tree_depth: z.number().int().nonnegative(),
   log_level: z.string(),
 });
 
@@ -253,6 +254,23 @@ export const zRunFinished = z.object({
 export const zRunScanProgress = z.object({
   run_id: z.string(),
   scanned: z.number(),
+});
+
+export const zScanTreeFolder = z.object({
+  path: z.string(),
+  count: z.number(),
+});
+
+export const zRunScanTree = z.object({
+  run_id: z.string(),
+  pair_id: z.string(),
+  folders: z.array(zScanTreeFolder),
+});
+
+export const zRunPlanProgress = z.object({
+  run_id: z.string(),
+  done: z.number(),
+  total: z.number(),
 });
 
 // ---- ffs_import.rs ----

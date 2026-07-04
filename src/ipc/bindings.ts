@@ -202,6 +202,9 @@ export interface Settings {
   mtime_gran_ms: number;
   /** Live scan-progress ticker interval, in milliseconds (clamped 30..=2000 at use). */
   scan_ticker_ms: number;
+  /** Live scan folder-tree depth: leading path segments to group scan activity by.
+   * 1 = top-level folders (default); higher nests deeper; 0 = off (clamped 0..=8). */
+  scan_tree_depth: number;
   /** tracing filter directive for the diagnostic log ("info", "debug", …). */
   log_level: string;
 }
@@ -272,6 +275,30 @@ export interface RunScanProgress {
   run_id: string;
   /** Cumulative entries recorded across the job's pairs so far this scan. */
   scanned: number;
+}
+
+/** One shallow folder's live scan activity (lib.rs ScanTreeFolder). */
+export interface ScanTreeFolder {
+  /** Top-level (or scan_tree_depth-deep) relative folder; "" = root level. */
+  path: string;
+  count: number;
+}
+
+/** Live folder-activity snapshot during the scan phase (lib.rs RunScanTree).
+ * Folders are the CURRENT pair only (the tree resets at each pair boundary). */
+export interface RunScanTree {
+  run_id: string;
+  pair_id: string;
+  folders: ScanTreeFolder[];
+}
+
+/** Live planning-phase progress (lib.rs RunPlanProgress): the post-scan disk
+ * probes ("is the file there yet"), the slow part over a NAS. Emitted while the
+ * scan count is frozen so the UI shows "checking files" movement, not a freeze. */
+export interface RunPlanProgress {
+  run_id: string;
+  done: number;
+  total: number;
 }
 
 // ---- ffs_import.rs ----
