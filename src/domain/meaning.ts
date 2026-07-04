@@ -18,6 +18,7 @@ import type {
   ItemStatus,
   SyncMode,
 } from "../ipc/bindings";
+import type { RunStatus } from "./activity";
 
 /** A meaning entry: CSS var names + display strings. */
 export interface Meaning {
@@ -87,6 +88,15 @@ export const STATUS_MEANING: Record<ItemStatus, Meaning> = {
   Skipped: meaning("neutral", "skipped"),
   Failed: meaning("danger", "failed"),
   Conflict: meaning("conflict", "conflict"),
+};
+
+/** RunStatus -> meaning (Activity feed row: the derived run outcome). A clean run
+ * is ok (green), a user-cancelled run is warn (amber, not an error), a failed run
+ * is danger (red). Keyed by the status derived in domain/activity.ts. */
+export const RUN_STATUS_MEANING: Record<RunStatus, Meaning> = {
+  ok: meaning("ok", "ok", "✓"),
+  cancelled: meaning("warn", "cancelled", "⊘"),
+  failed: meaning("danger", "failed", "✕"),
 };
 
 /** SyncMode -> meaning (mode badge in the job editor / pair header).

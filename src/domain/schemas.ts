@@ -273,6 +273,41 @@ export const zRunPlanProgress = z.object({
   total: z.number(),
 });
 
+// ---- runlog.rs (Activity / run history) ----
+
+export const zPairRunLog = z.object({
+  pair_id: z.string(),
+  entries_a: z.number(),
+  entries_b: z.number(),
+  errors_a: z.number(),
+  errors_b: z.number(),
+  skipped_a: z.number(),
+  skipped_b: z.number(),
+  scanned: z.number(),
+  threads: z.number(),
+  ms: z.number(),
+  ok: z.boolean(),
+  error: z.string().optional(),
+});
+
+/** `cancelled` is omitted on disk for a clean run (serde skip); default it to
+ * false so the parsed record always carries a boolean. `error` is absent unless
+ * the run failed. */
+export const zRunLog = z.object({
+  run_id: z.string(),
+  job_id: z.string(),
+  phase: z.string(),
+  trigger: z.string(),
+  started: z.string(),
+  ended: z.string(),
+  ms: z.number(),
+  pair_count: z.number(),
+  pairs: z.array(zPairRunLog),
+  ok: z.boolean(),
+  cancelled: z.boolean().optional().default(false),
+  error: z.string().optional(),
+});
+
 // ---- ffs_import.rs ----
 
 export const zImportedJob = z.object({

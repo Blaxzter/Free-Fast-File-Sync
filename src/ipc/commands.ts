@@ -13,6 +13,7 @@ import {
   zFfsImport,
   zJob,
   zPreviewJobResult,
+  zRunLog,
   zSettings,
 } from "../domain/schemas";
 import type {
@@ -22,6 +23,7 @@ import type {
   Job,
   PreviewJobResult,
   Resolution,
+  RunLog,
   Settings,
 } from "./bindings";
 
@@ -96,6 +98,15 @@ export async function getSettings(): Promise<Settings> {
 export async function saveSettings(settings: Settings): Promise<Settings> {
   const raw = await invoke("save_settings", { settings });
   return zSettings.parse(raw);
+}
+
+// ---- Activity (run history) ----
+
+/** Recent run history, newest first (list_activity). Reads the append-only run
+ * log; never mutates it. Empty when there is no history yet. */
+export async function listActivity(): Promise<RunLog[]> {
+  const raw = await invoke("list_activity");
+  return z.array(zRunLog).parse(raw) as RunLog[];
 }
 
 // ---- FFS import ----

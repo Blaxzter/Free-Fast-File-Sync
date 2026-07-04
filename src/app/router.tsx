@@ -10,6 +10,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { AppShell } from "../components/shell/AppShell";
+import { ActivityFeed } from "../features/activity/ActivityFeed";
 import { ComingSoon } from "../features/ComingSoon";
 import { CompareWorkspace } from "../features/jobs/CompareWorkspace";
 import { JobDetail } from "../features/jobs/JobDetail";
@@ -67,12 +68,7 @@ const jobDetailRoute = createRoute({
 const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/activity",
-  component: () => (
-    <ComingSoon
-      title="Activity"
-      description="Run history and the live run console land with the run registry in a later phase."
-    />
-  ),
+  component: ActivityFeed,
 });
 const conflictsRoute = createRoute({
   getParentRoute: () => rootRoute,
