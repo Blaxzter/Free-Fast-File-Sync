@@ -10,13 +10,13 @@
 //! errors are traced and swallowed. Runs are serialized by the `RunRegistry`, so
 //! there is never a concurrent appender to this file.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Per-pair scan/plan outcome inside a run.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairRunLog {
     pub pair_id: String,
     /// Entries recorded on each side after filtering (files + dirs).
@@ -43,12 +43,12 @@ pub struct PairRunLog {
 }
 
 /// One full run (all pairs) record.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunLog {
     pub run_id: String,
     pub job_id: String,
     /// `"preview"` or `"execute"`.
-    pub phase: &'static str,
+    pub phase: String,
     pub trigger: String,
     pub started: String, // RFC3339 UTC
     pub ended: String,   // RFC3339 UTC
@@ -59,10 +59,11 @@ pub struct RunLog {
     pub ok: bool,
     /// True iff a user cancel interrupted the run partway (distinct from a clean
     /// finish and from a failure) — so the log can tell "the scan stopped because I
-    /// cancelled" apart from "the scan crashed/finished".
-    #[serde(skip_serializing_if = "is_false")]
+    /// cancelled" apart from "the scan crashed/finished". `#[serde(default)]` so a
+    /// clean record (which omits it) reads back as `false`.
+    #[serde(default, skip_serializing_if = "is_false")]
     pub cancelled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
@@ -75,7 +76,7 @@ fn is_false(b: &bool) -> bool {
 pub struct RunLogBuilder {
     run_id: String,
     job_id: String,
-    phase: &'static str,
+    phase: String,
     trigger: String,
     started_rfc3339: String,
     started_at: Instant,
@@ -102,7 +103,7 @@ impl RunLogBuilder {
         RunLogBuilder {
             run_id: run_id.to_string(),
             job_id: job_id.to_string(),
-            phase,
+            phase: phase.to_string(),
             trigger: trigger.to_string(),
             started_rfc3339: crate::timeutil::now_rfc3339(),
             started_at: Instant::now(),
@@ -115,7 +116,7 @@ impl RunLogBuilder {
     pub fn pair(&mut self, p: PairRunLog) {
         tracing::info!(
             run = %self.run_id,
-            phase = self.phase,
+            phase = %self.phase,
             pair = %p.pair_id,
             entries_a = p.entries_a,
             entries_b = p.entries_b,
@@ -156,11 +157,11 @@ impl RunLogBuilder {
         };
 
         if let Some(err) = rec.error.as_deref() {
-            tracing::error!(run = %rec.run_id, phase = rec.phase, ms, error = err, "run failed");
+            tracing::error!(run = %rec.run_id, phase = %rec.phase, ms, error = err, "run failed");
         } else if cancelled {
-            tracing::warn!(run = %rec.run_id, phase = rec.phase, ms, "run cancelled");
+            tracing::warn!(run = %rec.run_id, phase = %rec.phase, ms, "run cancelled");
         } else {
-            tracing::info!(run = %rec.run_id, phase = rec.phase, ms, "run finished ok");
+            tracing::info!(run = %rec.run_id, phase = %rec.phase, ms, "run finished ok");
         }
         append(app_dir, &rec);
     }
@@ -203,6 +204,34 @@ pub fn append(app_dir: &Path, rec: &RunLog) {
     }
 }
 
+/// Read the append-only run log back, newest run first (reverse file order). This
+/// is the read side the Activity screen consumes via the `list_activity` command.
+///
+/// Best-effort and defensive, mirroring `store::Store::list`: a missing file lists
+/// empty (never an error — you simply have no history yet), and a single corrupt /
+/// half-written line is SKIPPED rather than aborting the whole read (one truncated
+/// tail line must not hide every earlier run). `limit` caps the number of most-
+/// recent runs returned; `0` means "no cap".
+pub fn read_run_log(app_dir: &Path, limit: usize) -> Vec<RunLog> {
+    let path = run_log_path(app_dir);
+    let body = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        // No log yet (or unreadable) => empty history, not an error.
+        Err(_) => return Vec::new(),
+    };
+    let mut runs: Vec<RunLog> = body
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str::<RunLog>(l).ok())
+        .collect();
+    // File is appended oldest-first; the UI wants newest-first.
+    runs.reverse();
+    if limit > 0 && runs.len() > limit {
+        runs.truncate(limit);
+    }
+    runs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,7 +260,7 @@ mod tests {
         let rec = RunLog {
             run_id: "01RUN".into(),
             job_id: "01JOB".into(),
-            phase: "preview",
+            phase: "preview".into(),
             trigger: "Manual".into(),
             started: "2026-06-26T00:00:00Z".into(),
             ended: "2026-06-26T00:00:01Z".into(),
@@ -262,7 +291,7 @@ mod tests {
         let ok = RunLog {
             run_id: "ok".into(),
             job_id: "j".into(),
-            phase: "preview",
+            phase: "preview".into(),
             trigger: "Manual".into(),
             started: "x".into(),
             ended: "y".into(),
@@ -304,5 +333,80 @@ mod tests {
         assert_eq!(v2["ok"], false);
         assert_eq!(v2["cancelled"], true);
         assert!(v2.get("error").is_none(), "a cancel is not an error");
+    }
+
+    fn run(id: &str) -> RunLog {
+        RunLog {
+            run_id: id.into(),
+            job_id: "j".into(),
+            phase: "execute".into(),
+            trigger: "Manual".into(),
+            started: "x".into(),
+            ended: "y".into(),
+            ms: 1,
+            pair_count: 1,
+            pairs: vec![pair("01PAIR", true)],
+            ok: true,
+            cancelled: false,
+            error: None,
+        }
+    }
+
+    /// Round-trips through the on-disk JSONL and returns runs newest-first, and a
+    /// clean record (which omits `cancelled`) reads back as `cancelled == false`.
+    #[test]
+    fn read_run_log_returns_newest_first_and_defaults_cancelled() {
+        let dir = tempdir().unwrap();
+        append(dir.path(), &run("01OLDEST"));
+        append(dir.path(), &run("02MIDDLE"));
+        append(dir.path(), &run("03NEWEST"));
+
+        let got = read_run_log(dir.path(), 0);
+        let ids: Vec<&str> = got.iter().map(|r| r.run_id.as_str()).collect();
+        assert_eq!(ids, vec!["03NEWEST", "02MIDDLE", "01OLDEST"]);
+        // A field skipped on serialize deserializes back to its default.
+        assert!(got.iter().all(|r| !r.cancelled));
+        // Nested pair fields survive the round-trip.
+        assert_eq!(got[0].pairs[0].entries_a, 10);
+    }
+
+    /// A missing log file is empty history, never an error.
+    #[test]
+    fn read_run_log_missing_file_is_empty() {
+        let dir = tempdir().unwrap();
+        assert!(read_run_log(dir.path(), 0).is_empty());
+    }
+
+    /// A single corrupt / half-written line is skipped, not fatal: every valid
+    /// earlier run is still returned (a truncated tail must not hide all history).
+    #[test]
+    fn read_run_log_skips_corrupt_lines() {
+        let dir = tempdir().unwrap();
+        append(dir.path(), &run("01GOOD"));
+        // Simulate a torn append (process died mid-write).
+        let path = run_log_path(dir.path());
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(f, "{{\"run_id\":\"BROKEN\",").unwrap();
+        drop(f);
+        append(dir.path(), &run("02GOOD"));
+
+        let got = read_run_log(dir.path(), 0);
+        let ids: Vec<&str> = got.iter().map(|r| r.run_id.as_str()).collect();
+        assert_eq!(ids, vec!["02GOOD", "01GOOD"], "corrupt line dropped");
+    }
+
+    /// `limit` caps to the N most-recent runs (which, post-reverse, are the head).
+    #[test]
+    fn read_run_log_limit_caps_to_most_recent() {
+        let dir = tempdir().unwrap();
+        for i in 0..5 {
+            append(dir.path(), &run(&format!("0{i}RUN")));
+        }
+        let got = read_run_log(dir.path(), 2);
+        let ids: Vec<&str> = got.iter().map(|r| r.run_id.as_str()).collect();
+        assert_eq!(ids, vec!["04RUN", "03RUN"]);
     }
 }

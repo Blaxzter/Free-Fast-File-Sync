@@ -1,0 +1,169 @@
+/* Activity feed: run-history list. Token-driven; the only meaning color is the
+ * per-run status (applied inline from RUN_STATUS_MEANING in the component). */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+.listHeader {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-4);
+}
+.listTitle {
+  font-size: var(--fs-display);
+  line-height: var(--lh-display);
+  font-weight: 650;
+  color: var(--text);
+}
+.count {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* ---- one run ---- */
+.run {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.runHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  transition: background var(--dur-fast) var(--ease);
+}
+.runHeader:hover {
+  background: var(--bg-hover);
+}
+
+.phase {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+/* A Sync run (writes to disk) reads stronger than a read-only Preview. */
+.phase[data-apply="true"] {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+.trigger {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  text-transform: lowercase;
+}
+.spacer {
+  flex: 1;
+}
+.meta {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.dot {
+  color: var(--text-faint);
+}
+.errors {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--danger-fg);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  white-space: nowrap;
+}
+
+.errorLine {
+  padding: 0 var(--sp-4) var(--sp-3) calc(var(--sp-4) + 18px);
+  font-size: var(--fs-sm);
+  color: var(--danger-fg);
+  font-family: var(--font-mono);
+  word-break: break-word;
+}
+
+/* ---- expanded detail ---- */
+.detail {
+  border-top: 1px solid var(--border);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-inset);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.summaryRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  font-size: var(--fs-sm);
+}
+.stat {
+  color: var(--text-muted);
+}
+.stat b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pairs {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+}
+.pairs th {
+  text-align: right;
+  padding: var(--sp-1) var(--sp-3);
+  color: var(--text-faint);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+.pairs th:first-child {
+  text-align: left;
+}
+.pairs td {
+  text-align: right;
+  padding: var(--sp-1) var(--sp-3);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.pairs td:first-child {
+  text-align: left;
+}
+.pairs td[data-danger="true"] {
+  color: var(--danger-fg);
+  font-weight: 600;
+}
+.pairs tr[data-ok="false"] .pairId {
+  color: var(--danger-fg);
+}
+.pairId {
+  color: var(--text-muted);
+}

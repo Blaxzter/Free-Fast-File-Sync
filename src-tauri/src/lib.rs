@@ -734,6 +734,22 @@ fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<Setti
 }
 
 // ---------------------------------------------------------------------------
+// Activity (run history)
+// ---------------------------------------------------------------------------
+
+/// Cap on runs returned by `list_activity`. The Activity feed shows recent
+/// history; the full append-only log stays on disk for forensics.
+const ACTIVITY_LIMIT: usize = 500;
+
+/// Recent run history, newest first, read from the append-only run log
+/// (`<app_dir>/runs/run-log.jsonl`) that every preview/execute run writes on
+/// finish. Read-only: this never mutates the log. A missing log => empty history.
+#[tauri::command]
+fn list_activity(state: State<'_, AppState>) -> Vec<runlog::RunLog> {
+    runlog::read_run_log(&state.app_dir, ACTIVITY_LIMIT)
+}
+
+// ---------------------------------------------------------------------------
 // FFS import (unchanged)
 // ---------------------------------------------------------------------------
 
@@ -789,6 +805,7 @@ pub fn run() {
             cancel_run,
             get_settings,
             save_settings,
+            list_activity,
             import_ffs
         ])
         .run(tauri::generate_context!())

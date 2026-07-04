@@ -301,6 +301,54 @@ export interface RunPlanProgress {
   total: number;
 }
 
+// ---- runlog.rs (Activity / run history) ----
+
+/** One pair's scan/plan outcome inside a run (runlog.rs PairRunLog). */
+export interface PairRunLog {
+  pair_id: string;
+  /** Entries recorded on each side after filtering (files + dirs). */
+  entries_a: number;
+  entries_b: number;
+  /** Genuine read/stat failures per side (non-zero => deletions were suppressed). */
+  errors_a: number;
+  errors_b: number;
+  /** Intentionally-skipped entries per side (symlink, junction, placeholder, …). */
+  skipped_a: number;
+  skipped_b: number;
+  /** Live cumulative `scanned` delta attributed to this pair (both sides). */
+  scanned: number;
+  /** Effective walker thread count used for this pair's scan (per root). */
+  threads: number;
+  /** Wall-clock milliseconds for this pair (scan + plan, or scan + apply). */
+  ms: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** One finished run (all pairs), read from the append-only run log (runlog.rs
+ * RunLog). `list_activity` returns these newest-first. `cancelled`/`error` are
+ * omitted on disk for a clean run, so both are optional here. */
+export interface RunLog {
+  run_id: string;
+  job_id: string;
+  /** "preview" or "execute". */
+  phase: string;
+  trigger: string;
+  /** RFC3339 UTC start/end timestamps. */
+  started: string;
+  ended: string;
+  /** Whole-run wall-clock, milliseconds. */
+  ms: number;
+  pair_count: number;
+  pairs: PairRunLog[];
+  /** True iff the run completed without error AND was not cancelled. */
+  ok: boolean;
+  /** True iff a user cancel interrupted the run partway. Omitted on disk when false. */
+  cancelled?: boolean;
+  /** Present iff the run failed. */
+  error?: string;
+}
+
 // ---- ffs_import.rs ----
 
 export interface ImportedJob {

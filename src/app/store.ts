@@ -33,6 +33,7 @@ import {
   onRunScanTree,
   onRunStarted,
 } from "../ipc/events";
+import { queryClient } from "./queryClient";
 
 export type EnginePhase = "idle" | "scanning" | "applying";
 
@@ -345,7 +346,12 @@ export async function subscribeRunEvents(): Promise<() => void> {
     onRunPlanProgress((e) => st().applyRunPlanProgress(e)),
     onRunProgress((p) => st().applyRunProgress(p)),
     onRunPairDone((e) => st().applyRunPairDone(e)),
-    onRunFinished((e) => st().applyRunFinished(e)),
+    onRunFinished((e) => {
+      st().applyRunFinished(e);
+      // A finished run has appended a record to the run log; refresh any open
+      // Activity feed. Covers every trigger (manual today; watch/schedule later).
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
+    }),
   ]);
   return () => {
     for (const un of unlistens) un();

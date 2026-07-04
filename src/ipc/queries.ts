@@ -3,13 +3,24 @@
 
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { BaselineStatusKind, Job } from "./bindings";
-import { getJob, getPairBaselineStatus, getSettings, listJobs } from "./commands";
+import { getJob, getPairBaselineStatus, getSettings, listActivity, listJobs } from "./commands";
 
 /** Global application settings (get_settings). */
 export function useSettings() {
   return useQuery({
     queryKey: ["settings"],
     queryFn: getSettings,
+  });
+}
+
+/** Recent run history, newest first (list_activity). A finished run is appended
+ * to the log on the backend, so invalidate ["activity"] after execute/preview to
+ * refetch. Kept fresh for a short window since history only grows. */
+export function useActivity() {
+  return useQuery({
+    queryKey: ["activity"],
+    queryFn: listActivity,
+    staleTime: 5_000,
   });
 }
 

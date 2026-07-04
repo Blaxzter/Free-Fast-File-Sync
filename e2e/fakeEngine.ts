@@ -25,6 +25,7 @@ import type {
   PlanItem,
   PlanSummary,
   PreviewJobResult,
+  RunLog,
   ScanTreeFolder,
   SyncPlan,
 } from "../src/ipc/bindings";
@@ -228,6 +229,8 @@ interface Scenario {
     folders: ScanTreeFolder[];
     plan?: { done: number; total: number };
   };
+  /** Run history returned by list_activity (Activity feed). Defaults to empty. */
+  activity?: RunLog[];
 }
 
 function pairPreview(pl: SyncPlan): PairPreview {
@@ -549,6 +552,9 @@ export function installFakeEngine(scenarioName: string): void {
 
         case "import_ffs":
           return { jobs: [], notes: [] };
+
+        case "list_activity":
+          return sc.activity ?? [];
 
         default:
           return undefined;
