@@ -201,6 +201,7 @@ mod tests {
             updated_at: String::new(),
             settings: JobSettings::default(),
             pairs,
+            automation: None,
         }
     }
 

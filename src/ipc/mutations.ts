@@ -5,15 +5,26 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "../app/store";
-import type { ExecuteJobResult, Job, PreviewJobResult, Resolution, Settings } from "./bindings";
+import type {
+  ExecuteJobResult,
+  Job,
+  PreviewJobResult,
+  Resolution,
+  ScheduleConfig,
+  Settings,
+} from "./bindings";
 import {
   cancelRun as cancelRunCmd,
+  clearSchedule,
   deleteJob,
   duplicateJob,
   executeJob,
+  pauseSchedule,
   previewJob,
+  runScheduleNow,
   saveJob,
   saveSettings,
+  setSchedule,
 } from "./commands";
 
 // ---- Run surface ----
@@ -112,6 +123,66 @@ export function useDuplicateJob() {
     mutationFn: (jobId) => duplicateJob(jobId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+}
+
+// ---- Scheduling ----
+
+/** After any schedule write the saved job carries the new automation, so refresh
+ * the cross-job schedules lens plus the job caches. */
+function invalidateSchedules(qc: ReturnType<typeof useQueryClient>, jobId: string) {
+  void qc.invalidateQueries({ queryKey: ["schedules"] });
+  void qc.invalidateQueries({ queryKey: ["jobs"] });
+  void qc.invalidateQueries({ queryKey: ["job", jobId] });
+}
+
+export interface SetScheduleArgs {
+  jobId: string;
+  schedule: ScheduleConfig;
+}
+
+/** Attach/replace a job's schedule (set_schedule). */
+export function useSetSchedule() {
+  const qc = useQueryClient();
+  return useMutation<Job, unknown, SetScheduleArgs>({
+    mutationFn: ({ jobId, schedule }) => setSchedule(jobId, schedule),
+    onSuccess: (saved) => invalidateSchedules(qc, saved.id),
+  });
+}
+
+export interface PauseScheduleArgs {
+  jobId: string;
+  paused: boolean;
+}
+
+/** Pause or resume a job's schedule (pause_schedule). */
+export function usePauseSchedule() {
+  const qc = useQueryClient();
+  return useMutation<Job, unknown, PauseScheduleArgs>({
+    mutationFn: ({ jobId, paused }) => pauseSchedule(jobId, paused),
+    onSuccess: (saved) => invalidateSchedules(qc, saved.id),
+  });
+}
+
+/** Remove a job's schedule (clear_schedule). */
+export function useClearSchedule() {
+  const qc = useQueryClient();
+  return useMutation<Job, unknown, string>({
+    mutationFn: (jobId) => clearSchedule(jobId),
+    onSuccess: (saved) => invalidateSchedules(qc, saved.id),
+  });
+}
+
+/** Fire a job's scheduled run now (run_schedule_now). Refreshes activity + the
+ * next-run column once the run has been kicked off. */
+export function useRunScheduleNow() {
+  const qc = useQueryClient();
+  return useMutation<void, unknown, string>({
+    mutationFn: (jobId) => runScheduleNow(jobId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["activity"] });
+      void qc.invalidateQueries({ queryKey: ["schedules"] });
     },
   });
 }

@@ -61,6 +61,7 @@ fn job(pairs: Vec<FolderPair>) -> Job {
             ..Default::default()
         },
         pairs,
+        automation: None,
     }
 }
 

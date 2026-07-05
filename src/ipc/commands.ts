@@ -14,6 +14,7 @@ import {
   zJob,
   zPreviewJobResult,
   zRunLog,
+  zScheduleView,
   zSettings,
 } from "../domain/schemas";
 import type {
@@ -24,6 +25,8 @@ import type {
   PreviewJobResult,
   Resolution,
   RunLog,
+  ScheduleConfig,
+  ScheduleView,
   Settings,
 } from "./bindings";
 
@@ -107,6 +110,38 @@ export async function saveSettings(settings: Settings): Promise<Settings> {
 export async function listActivity(): Promise<RunLog[]> {
   const raw = await invoke("list_activity");
   return z.array(zRunLog).parse(raw) as RunLog[];
+}
+
+// ---- Scheduling ----
+
+/** Every job's schedule with its next computed fire, soonest-first (list_schedules). */
+export async function listSchedules(): Promise<ScheduleView[]> {
+  const raw = await invoke("list_schedules");
+  return z.array(zScheduleView).parse(raw) as ScheduleView[];
+}
+
+/** Attach/replace a job's cron schedule (set_schedule). Rejects a bad cron at the
+ * boundary. Returns the saved job. */
+export async function setSchedule(jobId: string, schedule: ScheduleConfig): Promise<Job> {
+  const raw = await invoke("set_schedule", { jobId, schedule });
+  return zJob.parse(raw) as Job;
+}
+
+/** Remove a job's schedule entirely (clear_schedule). Returns the saved job. */
+export async function clearSchedule(jobId: string): Promise<Job> {
+  const raw = await invoke("clear_schedule", { jobId });
+  return zJob.parse(raw) as Job;
+}
+
+/** Pause or resume a job's schedule without discarding its cron (pause_schedule). */
+export async function pauseSchedule(jobId: string, paused: boolean): Promise<Job> {
+  const raw = await invoke("pause_schedule", { jobId, paused });
+  return zJob.parse(raw) as Job;
+}
+
+/** Fire a job's scheduled run immediately, regardless of cron (run_schedule_now). */
+export function runScheduleNow(jobId: string): Promise<void> {
+  return invoke<void>("run_schedule_now", { jobId });
 }
 
 // ---- FFS import ----

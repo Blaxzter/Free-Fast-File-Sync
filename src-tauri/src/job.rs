@@ -132,6 +132,75 @@ fn yes() -> bool {
     true
 }
 
+/// What an unattended scheduled run is allowed to do. Conflicts are NEVER
+/// auto-resolved under any policy — the pipeline defers them to Activity/Inbox
+/// (see [`crate::model::AutoApplyPolicy`]); this only governs the SAFE changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SchedulePolicy {
+    /// Scan + plan + record to Activity, but write NOTHING (a "notify me" schedule).
+    PreviewOnly,
+    /// Apply non-destructive changes (copies/updates); defer ALL deletes AND conflicts.
+    ApplySafe,
+    /// Apply copies/updates AND deletes; defer conflicts; a big-delete trip ABORTS
+    /// the run (never auto-confirmed). The default — the only policy under which a
+    /// scheduled mirror/backup actually converges.
+    #[default]
+    ApplyAll,
+}
+
+impl SchedulePolicy {
+    /// The apply-loop policy this schedule maps to. `PreviewOnly` never reaches the
+    /// apply loop (the pipeline stops after preview), so it collapses to the inert
+    /// `Manual` placeholder that path never consults.
+    pub fn auto_apply(&self) -> crate::model::AutoApplyPolicy {
+        use crate::model::AutoApplyPolicy;
+        match self {
+            SchedulePolicy::PreviewOnly => AutoApplyPolicy::Manual,
+            SchedulePolicy::ApplySafe => AutoApplyPolicy::ApplySafe,
+            SchedulePolicy::ApplyAll => AutoApplyPolicy::ApplyAll,
+        }
+    }
+
+    /// True for `PreviewOnly`: the run stops after preview and writes nothing.
+    pub fn is_preview_only(&self) -> bool {
+        matches!(self, SchedulePolicy::PreviewOnly)
+    }
+}
+
+/// A per-job cron schedule. Persisted ON the Job aggregate (the locked model —
+/// there is no separate schedule store); the scheduler reads every job's
+/// `automation.schedule` and fires the enabled ones.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleConfig {
+    /// A paused schedule is retained but never fires.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Standard 5-field cron expression: `minute hour day-of-month month
+    /// day-of-week`. Evaluated in the user's local wall-clock via
+    /// `tz_offset_minutes` (see [`crate::cron`]).
+    pub cron: String,
+    /// The user's UTC offset in MINUTES (e.g. Berlin summer = 120), supplied by the
+    /// frontend at save time so the cron fires at local wall-clock. `None` =>
+    /// evaluate in UTC. DST transitions are a known v1 limitation (a fixed offset,
+    /// not a named zone).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tz_offset_minutes: Option<i32>,
+    #[serde(default)]
+    pub policy: SchedulePolicy,
+    /// Reserved for the Phase 2 watcher: skip this tick when the watcher already
+    /// synced recently. Inert until Watch lands.
+    #[serde(default)]
+    pub skip_if_watched: bool,
+}
+
+/// Per-job automation slot. Only `schedule` is wired today; `watch` will join it
+/// with the Phase 2 notify daemon (kept as one aggregate so the shape is stable).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct JobAutomation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<ScheduleConfig>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Job {
     pub id: String, // ULID
@@ -143,6 +212,9 @@ pub struct Job {
     #[serde(default)]
     pub settings: JobSettings,
     pub pairs: Vec<FolderPair>,
+    /// Scheduling / (later) watch automation. `None` => no automation configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<JobAutomation>,
 }
 
 /// One pair, fully resolved to what the EXISTING engine consumes. `JobConfig` is
@@ -368,6 +440,7 @@ mod tests {
             updated_at: "2026-01-01T00:00:00Z".into(),
             settings: JobSettings::default(),
             pairs,
+            automation: None,
         }
     }
 
@@ -394,6 +467,56 @@ mod tests {
         let bytes = serde_json::to_vec(&job).unwrap();
         let back: Job = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(job, back);
+    }
+
+    #[test]
+    fn job_with_schedule_round_trips() {
+        let mut job = job_with(vec![pair("01PAIR0000000000000000001A")]);
+        job.automation = Some(JobAutomation {
+            schedule: Some(ScheduleConfig {
+                enabled: true,
+                cron: "0 2 * * *".into(),
+                tz_offset_minutes: Some(120),
+                policy: SchedulePolicy::ApplyAll,
+                skip_if_watched: false,
+            }),
+        });
+        let bytes = serde_json::to_vec(&job).unwrap();
+        let back: Job = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(job, back);
+    }
+
+    /// An older job.json predating scheduling has no `automation` key; it must still
+    /// load (serde default => `None`).
+    #[test]
+    fn job_without_automation_field_still_loads() {
+        let json = r#"{
+            "id":"01JOBOLD0000000000000000001","name":"old",
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z",
+            "settings":{},"pairs":[]
+        }"#;
+        let job: Job = serde_json::from_str(json).unwrap();
+        assert!(job.automation.is_none());
+    }
+
+    #[test]
+    fn schedule_policy_default_and_auto_apply_mapping() {
+        use crate::model::AutoApplyPolicy;
+        assert_eq!(SchedulePolicy::default(), SchedulePolicy::ApplyAll);
+        assert_eq!(
+            SchedulePolicy::ApplyAll.auto_apply(),
+            AutoApplyPolicy::ApplyAll
+        );
+        assert_eq!(
+            SchedulePolicy::ApplySafe.auto_apply(),
+            AutoApplyPolicy::ApplySafe
+        );
+        assert!(SchedulePolicy::PreviewOnly.is_preview_only());
+        // PreviewOnly stops before apply, so it maps to the inert Manual placeholder.
+        assert_eq!(
+            SchedulePolicy::PreviewOnly.auto_apply(),
+            AutoApplyPolicy::Manual
+        );
     }
 
     #[test]

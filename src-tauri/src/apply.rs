@@ -45,12 +45,18 @@ enum Eff {
     Delete(Side),
     KeepBoth,
     SkipConflict,
+    /// A change the active [`AutoApplyPolicy`] declines to apply this run (an
+    /// automated run deferring a delete). Recorded as `Skipped` so it re-surfaces
+    /// next run and is visible in the report, never silently dropped.
+    Deferred,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_plan(
     cfg: &JobConfig,
     plan: &SyncPlan,
     resolutions: &HashMap<String, Resolution>,
+    policy: AutoApplyPolicy,
     base: &mut Baseline,
     gran_ns: i64,
     cancel: &AtomicBool,
@@ -59,7 +65,7 @@ pub fn apply_plan(
     // Resolve every item to a concrete effect first.
     let mut effects: Vec<(usize, Eff)> = Vec::with_capacity(plan.items.len());
     for (i, item) in plan.items.iter().enumerate() {
-        effects.push((i, effect_for(item, resolutions)));
+        effects.push((i, effect_for(item, resolutions, policy)));
     }
 
     // Non-deletes (incl. dir creates) run parents-first (ascending key); deletes
@@ -80,7 +86,7 @@ pub fn apply_plan(
     let ordered: Vec<(usize, &Eff)> = non_deletes.into_iter().chain(deletes).collect();
     let total = ordered
         .iter()
-        .filter(|(_, e)| !matches!(e, Eff::Noop | Eff::BaselineOnly))
+        .filter(|(_, e)| !matches!(e, Eff::Noop | Eff::BaselineOnly | Eff::Deferred))
         .count();
 
     let mut report = ApplyReport::default();
@@ -116,6 +122,11 @@ pub fn apply_plan(
                     error: None,
                 });
             }
+            Eff::Deferred => skip(
+                &mut report,
+                item,
+                "deferred by schedule policy (no deletes)".into(),
+            ),
             Eff::Copy(dir) => {
                 done_counter += 1;
                 progress(Progress {
@@ -203,20 +214,40 @@ enum SkipOrFail {
 }
 type Outcome = std::result::Result<u64, SkipOrFail>;
 
-fn effect_for(item: &PlanItem, resolutions: &HashMap<String, Resolution>) -> Eff {
+fn effect_for(
+    item: &PlanItem,
+    resolutions: &HashMap<String, Resolution>,
+    policy: AutoApplyPolicy,
+) -> Eff {
     match item.action {
         Action::Noop => Eff::Noop,
         Action::UpdateBaselineOnly => Eff::BaselineOnly,
         Action::CopyAtoB => Eff::Copy(Dir::AtoB),
         Action::CopyBtoA => Eff::Copy(Dir::BtoA),
+        Action::DeleteA if policy.defers_deletes() => Eff::Deferred,
+        Action::DeleteB if policy.defers_deletes() => Eff::Deferred,
         Action::DeleteA => Eff::Delete(Side::A),
         Action::DeleteB => Eff::Delete(Side::B),
         Action::Conflict => {
-            let res = resolutions
-                .get(&item.path)
-                .copied()
-                .or(item.default_resolution)
-                .unwrap_or(Resolution::Skip);
+            // An automated run never AUTO-resolves a conflict. The one difference
+            // from Manual is that it drops the `default_resolution` fallback: the
+            // plan pre-fills a non-`Skip` recommendation per conflict (e.g.
+            // ModifyDelete → KeepModified) that an empty map would otherwise apply
+            // silently. It still honors an EXPLICIT map entry — the seam a future
+            // standing conflict-policy uses to pre-fill scheduled resolutions. The
+            // current scheduler passes an empty map, so every conflict defers.
+            let res = if policy.defers_conflicts() {
+                resolutions
+                    .get(&item.path)
+                    .copied()
+                    .unwrap_or(Resolution::Skip)
+            } else {
+                resolutions
+                    .get(&item.path)
+                    .copied()
+                    .or(item.default_resolution)
+                    .unwrap_or(Resolution::Skip)
+            };
             resolve_conflict(item, res)
         }
     }
@@ -540,6 +571,95 @@ mod tests {
             "a/b/c.sync-conflict-42-B.txt"
         );
         assert_eq!(conflict_name("noext", "A", 7), "noext.sync-conflict-7-A");
+    }
+
+    /// Minimal `PlanItem` for exercising `effect_for` (no filesystem needed —
+    /// `effect_for` reads only `action`, `a_change`, `default_resolution`).
+    fn item(
+        action: Action,
+        a_change: ChangeKind,
+        default_resolution: Option<Resolution>,
+    ) -> PlanItem {
+        PlanItem {
+            path: "f.txt".into(),
+            action,
+            conflict: (action == Action::Conflict).then_some(ConflictType::ModifyDelete),
+            a_change,
+            b_change: ChangeKind::Deleted,
+            a: None,
+            b: None,
+            base: None,
+            default_resolution,
+            resolution_options: vec![],
+            note: String::new(),
+        }
+    }
+
+    /// Manual (interactive) run with an EMPTY resolutions map applies a conflict's
+    /// recommended `default_resolution` — today's UI prefill behavior. Here
+    /// KeepModified with an A-side edit resolves to a real A→B copy.
+    #[test]
+    fn manual_policy_applies_conflict_default_resolution() {
+        let it = item(
+            Action::Conflict,
+            ChangeKind::Modified,
+            Some(Resolution::KeepModified),
+        );
+        let eff = effect_for(&it, &HashMap::new(), AutoApplyPolicy::Manual);
+        assert!(matches!(eff, Eff::Copy(Dir::AtoB)));
+    }
+
+    /// The core safety property: an automated run must NEVER apply a conflict off
+    /// its `default_resolution`. The same conflict that Manual would copy must
+    /// defer (SkipConflict) under every automated policy with an empty map.
+    #[test]
+    fn automated_policy_never_auto_applies_a_conflict() {
+        let it = item(
+            Action::Conflict,
+            ChangeKind::Modified,
+            Some(Resolution::KeepModified),
+        );
+        for policy in [AutoApplyPolicy::ApplyAll, AutoApplyPolicy::ApplySafe] {
+            let eff = effect_for(&it, &HashMap::new(), policy);
+            assert!(
+                matches!(eff, Eff::SkipConflict),
+                "automated run must defer the conflict, not apply its default"
+            );
+        }
+    }
+
+    /// Automated policy still honors an EXPLICIT resolution (the seam a future
+    /// standing conflict-policy pre-fills); it only drops the `default_resolution`
+    /// fallback.
+    #[test]
+    fn automated_policy_honors_an_explicit_resolution() {
+        let it = item(
+            Action::Conflict,
+            ChangeKind::Modified,
+            Some(Resolution::KeepModified),
+        );
+        let mut res = HashMap::new();
+        res.insert("f.txt".to_string(), Resolution::KeepA);
+        let eff = effect_for(&it, &res, AutoApplyPolicy::ApplyAll);
+        assert!(matches!(eff, Eff::Copy(Dir::AtoB)));
+    }
+
+    /// ApplyAll applies deletes (like Manual); ApplySafe defers them.
+    #[test]
+    fn delete_handling_follows_policy() {
+        let del = item(Action::DeleteB, ChangeKind::Deleted, None);
+        assert!(matches!(
+            effect_for(&del, &HashMap::new(), AutoApplyPolicy::Manual),
+            Eff::Delete(Side::B)
+        ));
+        assert!(matches!(
+            effect_for(&del, &HashMap::new(), AutoApplyPolicy::ApplyAll),
+            Eff::Delete(Side::B)
+        ));
+        assert!(matches!(
+            effect_for(&del, &HashMap::new(), AutoApplyPolicy::ApplySafe),
+            Eff::Deferred
+        ));
     }
 
     fn file_meta(p: &Path) -> Meta {

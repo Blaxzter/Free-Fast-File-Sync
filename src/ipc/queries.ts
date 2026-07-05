@@ -3,7 +3,14 @@
 
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { BaselineStatusKind, Job } from "./bindings";
-import { getJob, getPairBaselineStatus, getSettings, listActivity, listJobs } from "./commands";
+import {
+  getJob,
+  getPairBaselineStatus,
+  getSettings,
+  listActivity,
+  listJobs,
+  listSchedules,
+} from "./commands";
 
 /** Global application settings (get_settings). */
 export function useSettings() {
@@ -29,6 +36,17 @@ export function useJobs() {
   return useQuery({
     queryKey: ["jobs"],
     queryFn: listJobs,
+  });
+}
+
+/** Every job's schedule with its next computed fire, soonest-first (list_schedules).
+ * `next_run` is recomputed on the backend at fetch time, so a periodic refetch
+ * keeps the countdown fresh. Invalidate ["schedules"] after any schedule change. */
+export function useSchedules() {
+  return useQuery({
+    queryKey: ["schedules"],
+    queryFn: listSchedules,
+    refetchInterval: 30_000,
   });
 }
 

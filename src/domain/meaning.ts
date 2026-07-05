@@ -16,6 +16,7 @@ import type {
   ConflictType,
   DeletionPolicy,
   ItemStatus,
+  SchedulePolicy,
   SyncMode,
 } from "../ipc/bindings";
 import type { RunStatus } from "./activity";
@@ -113,6 +114,15 @@ export const MODE_MEANING: Record<SyncMode, Meaning> = {
 export const DELETION_MEANING: Record<DeletionPolicy["kind"], Meaning> = {
   RecycleBin: meaning("ok", "Recycle Bin", "♺"),
   Permanent: meaning("danger", "Permanent", "✕"),
+};
+
+/** SchedulePolicy -> meaning (schedule badge). PreviewOnly is watch-cyan (writes
+ * nothing), ApplySafe is copy-blue (additive), ApplyAll is warn-amber (includes
+ * deletes — the reserved safety-amber for a destructive automated policy). */
+export const SCHEDULE_POLICY_MEANING: Record<SchedulePolicy, Meaning> = {
+  PreviewOnly: meaning("watch", "preview only", "◇"),
+  ApplySafe: meaning("copy", "apply safe", "→"),
+  ApplyAll: meaning("warn", "apply all", "⇄"),
 };
 
 /** Human labels for Resolution options (no color of their own). */

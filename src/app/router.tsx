@@ -16,6 +16,7 @@ import { CompareWorkspace } from "../features/jobs/CompareWorkspace";
 import { JobDetail } from "../features/jobs/JobDetail";
 import { JobEditor } from "../features/jobs/JobEditor";
 import { JobsList } from "../features/jobs/JobsList";
+import { SchedulesList } from "../features/schedules/SchedulesList";
 import { SettingsGeneral } from "../features/settings/SettingsGeneral";
 import { SettingsImport } from "../features/settings/SettingsImport";
 
@@ -85,12 +86,7 @@ const conflictsRoute = createRoute({
 const schedulesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/schedules",
-  component: () => (
-    <ComingSoon
-      title="Schedules"
-      description="Cross-job cron triggers, next-run ordering, and pause/run-now arrive with the scheduler."
-    />
-  ),
+  component: SchedulesList,
 });
 
 // ---- Watch domain ----

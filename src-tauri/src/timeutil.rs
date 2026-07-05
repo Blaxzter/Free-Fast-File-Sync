@@ -3,15 +3,20 @@
 //! this is the shared, tested implementation that `store.rs` (job timestamps) and
 //! `runlog.rs` (run records) both use.
 
-/// Current time as an RFC3339 UTC string at second precision, e.g.
-/// `2026-06-26T14:03:09Z`. A clock before the Unix epoch (impossible in practice)
-/// falls back to the epoch.
-pub fn now_rfc3339() -> String {
-    let secs = std::time::SystemTime::now()
+/// Current wall-clock time as Unix epoch seconds (UTC). A clock before the epoch
+/// (impossible in practice) reads as `0`. The scheduler evaluates cron fires
+/// against this.
+pub fn now_unix() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    rfc3339_from_unix_secs(secs)
+        .unwrap_or(0)
+}
+
+/// Current time as an RFC3339 UTC string at second precision, e.g.
+/// `2026-06-26T14:03:09Z`.
+pub fn now_rfc3339() -> String {
+    rfc3339_from_unix_secs(now_unix())
 }
 
 /// Format a Unix epoch second count as an RFC3339 UTC string.
@@ -24,8 +29,9 @@ pub fn rfc3339_from_unix_secs(secs: i64) -> String {
 }
 
 /// Howard Hinnant's days-from-civil, inverted: civil (y, m, d) from days since the
-/// Unix epoch.
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
+/// Unix epoch. `pub(crate)` so the cron evaluator can turn a minute index back into
+/// a (month, day) for field matching.
+pub(crate) fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;

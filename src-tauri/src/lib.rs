@@ -12,6 +12,7 @@
 mod apply;
 mod baseline;
 pub mod config;
+mod cron;
 pub mod engine;
 pub mod error;
 mod ffs_import;
@@ -25,13 +26,14 @@ mod reconcile;
 pub mod runlog;
 pub mod runs;
 pub mod scan;
+mod scheduler;
 pub mod settings;
 pub mod store;
 mod timeutil;
 
 use error::SyncError;
 use job::Job;
-use model::{ApplyReport, BaselineStatusKind, Resolution, SyncPlan};
+use model::{ApplyReport, AutoApplyPolicy, BaselineStatusKind, Resolution, SyncPlan};
 use runlog::{PairRunLog, RunLogBuilder};
 use runs::{RunDescriptor, RunError, RunRegistry};
 use serde::Serialize;
@@ -57,6 +59,9 @@ struct AppState {
     runs: Arc<RunRegistry>,
     /// Global, user-facing settings (mutable at runtime via `save_settings`).
     settings: Mutex<Settings>,
+    /// Background cron scheduler control surface (master switch + wake handle). The
+    /// loop itself is spawned once at startup and fires jobs via `auto_run_job`.
+    scheduler: scheduler::Scheduler,
     /// Keeps the non-blocking log appender's background writer thread alive for the
     /// whole process; dropping it would lose buffered log lines. `None` if a
     /// subscriber was already installed.
@@ -189,6 +194,16 @@ struct RunStarted {
     job_id: String,
     pair_count: usize,
     trigger: String,
+}
+
+/// Emitted when the scheduler fires a job, right before its run starts, so the
+/// Schedules/Activity UI can show a live "scheduled run starting" beat.
+#[derive(Clone, Serialize)]
+struct ScheduleTick {
+    job_id: String,
+    run_id: String,
+    /// The schedule's apply policy (`"PreviewOnly" | "ApplySafe" | "ApplyAll"`).
+    policy: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -355,179 +370,17 @@ async fn preview_job(
     let app_for_task = app.clone();
     let run_id_task = run_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let store = store::Store::new(store_dir);
-        // Live scan progress: a shared counter the parallel walk bumps per entry,
-        // polled by a ticker thread that emits run://scan-progress (~8/sec). The
-        // count is cumulative across the job's pairs. When the folder tree is
-        // enabled (scan_tree_depth > 0), the walk also tallies per-folder activity
-        // into a shared ScanTree the ticker snapshots into run://scan-tree.
-        let scanned = Arc::new(AtomicU64::new(0));
-        let tree = (tree_depth > 0).then(|| Arc::new(scan::ScanTree::new(tree_depth)));
-        // Planning (post-scan disk-probe) progress: the slow NAS part that runs
-        // AFTER the scan count stops moving. The ticker emits it so the UI shows
-        // "checking files" movement instead of a frozen count.
-        let plan_progress = Arc::new(plan::PlanProgress::default());
-        // The pair currently being scanned, so the ticker can tag each folder
-        // snapshot with its pair (the main loop updates this at each pair boundary).
-        let cur_pair = Arc::new(Mutex::new(String::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let ticker = {
-            let app = app_for_task.clone();
-            let run_id = run_id_task.clone();
-            let scanned = scanned.clone();
-            let tree = tree.clone();
-            let plan_progress = plan_progress.clone();
-            let cur_pair = cur_pair.clone();
-            let stop = stop.clone();
-            // The item count is cheap, so it ticks every interval; the folder tree
-            // is a larger payload, so throttle it lightly (~every 200ms) — still
-            // steady, just not flooding on a very fast ticker.
-            let tree_every = (200 / ticker_ms.max(1)).max(1);
-            std::thread::spawn(move || {
-                let mut tick: u64 = 0;
-                while !stop.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(ticker_ms));
-                    tick += 1;
-                    let _ = app.emit(
-                        "run://scan-progress",
-                        RunScanProgress {
-                            run_id: run_id.clone(),
-                            scanned: scanned.load(Ordering::Relaxed),
-                        },
-                    );
-                    // Planning phase: emit determinate probe progress while it runs.
-                    let plan_total = plan_progress.total.load(Ordering::Relaxed);
-                    if plan_total > 0 {
-                        let _ = app.emit(
-                            "run://plan-progress",
-                            RunPlanProgress {
-                                run_id: run_id.clone(),
-                                done: plan_progress.done.load(Ordering::Relaxed),
-                                total: plan_total,
-                            },
-                        );
-                    }
-                    if let Some(t) = &tree {
-                        if tick % tree_every == 0 {
-                            let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
-                            let _ = app.emit(
-                                "run://scan-tree",
-                                RunScanTree {
-                                    run_id: run_id.clone(),
-                                    pair_id,
-                                    folders: scan_tree_folders(t),
-                                },
-                            );
-                        }
-                    }
-                }
-            })
-        };
-        // Belt-and-suspenders: if anything below panics, the ticker is still told
-        // to stop on unwind so it can never run away.
-        let _ticker_guard = TickerGuard { stop: stop.clone() };
-
-        // Structured run record: one JSON line + tracing events when the run ends.
-        let mut rl = RunLogBuilder::new(
-            &run_id_task,
-            &job_id_for_paths,
-            "preview",
-            "Manual",
-            resolved.len(),
-        );
-        let mut pairs = Vec::with_capacity(resolved.len());
-        let mut run_err: Option<SyncError> = None;
-
-        for r in &resolved {
-            // Move the live folder tree to this pair: reset the counts and point the
-            // ticker's pair cursor at it, so the snapshot shows only this pair. Also
-            // clear planning progress so a stale "checking files" bar from the
-            // previous pair doesn't linger into this pair's scan.
-            if let Some(t) = &tree {
-                t.clear();
-            }
-            plan_progress.done.store(0, Ordering::Relaxed);
-            plan_progress.total.store(0, Ordering::Relaxed);
-            if let Ok(mut g) = cur_pair.lock() {
-                r.pair_id.clone_into(&mut g);
-            }
-            let _ = app_for_task.emit(
-                "run://scan",
-                RunScan {
-                    run_id: run_id_task.clone(),
-                    pair_id: r.pair_id.clone(),
-                    phase: "Scanning".into(),
-                },
-            );
-            let before = scanned.load(Ordering::Relaxed);
-            let t0 = Instant::now();
-            let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
-            let status = engine::baseline_status(&bpath);
-            match engine::preview_counted_stats(
-                &r.config,
-                &bpath,
-                &scanned,
-                tree.as_deref(),
-                Some(&plan_progress),
-            ) {
-                Ok((plan, stats)) => {
-                    rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
-                    pairs.push(PairPreview {
-                        pair_id: r.pair_id.clone(),
-                        plan,
-                        baseline_status: status,
-                    });
-                    let _ = app_for_task.emit(
-                        "run://pair-done",
-                        RunPairDone {
-                            run_id: run_id_task.clone(),
-                            pair_id: r.pair_id.clone(),
-                        },
-                    );
-                }
-                Err(e) => {
-                    rl.pair(pair_run_log(
-                        r,
-                        &engine::ScanStats::default(),
-                        &scanned,
-                        before,
-                        t0,
-                        Some(&e),
-                    ));
-                    run_err = Some(e);
-                    break; // a dead pair aborts the run; the slot is released below
-                }
-            }
-        }
-
-        stop.store(true, Ordering::Relaxed);
-        let _ = ticker.join();
-        // One final exact count + folder snapshot once the walk has settled.
-        let _ = app_for_task.emit(
-            "run://scan-progress",
-            RunScanProgress {
-                run_id: run_id_task.clone(),
-                scanned: scanned.load(Ordering::Relaxed),
-            },
-        );
-        if let Some(t) = &tree {
-            let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
-            let _ = app_for_task.emit(
-                "run://scan-tree",
-                RunScanTree {
-                    run_id: run_id_task.clone(),
-                    pair_id,
-                    folders: scan_tree_folders(t),
-                },
-            );
-        }
-        // Preview has no per-loop cancel observation, so it is never "cancelled".
-        rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), false);
-
-        match run_err {
-            Some(e) => Err(e),
-            None => Ok(pairs),
-        }
+        run_preview_loop(
+            app_for_task,
+            run_id_task,
+            job_id_for_paths,
+            resolved,
+            store_dir,
+            app_dir,
+            ticker_ms,
+            tree_depth,
+            "Manual".to_string(),
+        )
     })
     .await
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));
@@ -581,104 +434,20 @@ async fn execute_job(
 
     let app_for_task = app.clone();
     let run_id_task = run_id.clone();
-    let pair_count = resolved.len();
-
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let store = store::Store::new(store_dir);
-        // Counter for the apply-time re-scan, read per pair for the run-log.
-        let scanned = Arc::new(AtomicU64::new(0));
-        let mut rl = RunLogBuilder::new(
-            &run_id_task,
-            &job_id_for_paths,
-            "execute",
-            "Manual",
-            resolved.len(),
-        );
-        let mut reports = Vec::with_capacity(resolved.len());
-        let mut run_err: Option<SyncError> = None;
-
-        for (pair_index, r) in resolved.iter().enumerate() {
-            if cancel.load(Ordering::Relaxed) {
-                break;
-            }
-            let _ = app_for_task.emit(
-                "run://scan",
-                RunScan {
-                    run_id: run_id_task.clone(),
-                    pair_id: r.pair_id.clone(),
-                    phase: "Scanning".into(),
-                },
-            );
-            let before = scanned.load(Ordering::Relaxed);
-            let t0 = Instant::now();
-            let bpath = store.pair_baseline_path(&job_id_for_paths, &r.pair_id);
-            let res_for_pair = resolutions.get(&r.pair_id).cloned().unwrap_or_default();
-            let confirm = confirm_big_delete.get(&r.pair_id).copied().unwrap_or(false);
-
-            let pair_id = r.pair_id.clone();
-            let run_id_p = run_id_task.clone();
-            let app_p = app_for_task.clone();
-            match engine::execute_counted_stats(
-                &r.config,
-                &bpath,
-                &res_for_pair,
-                confirm,
-                &cancel,
-                &scanned,
-                move |p| {
-                    let _ = app_p.emit(
-                        "run://progress",
-                        RunProgress {
-                            run_id: run_id_p.clone(),
-                            pair_id: pair_id.clone(),
-                            pair_index,
-                            pair_count,
-                            done: p.done,
-                            total: p.total,
-                            path: p.path,
-                            action: p.action,
-                        },
-                    );
-                },
-            ) {
-                Ok((report, stats)) => {
-                    rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
-                    reports.push(PairReport {
-                        pair_id: r.pair_id.clone(),
-                        report,
-                    });
-                    let _ = app_for_task.emit(
-                        "run://pair-done",
-                        RunPairDone {
-                            run_id: run_id_task.clone(),
-                            pair_id: r.pair_id.clone(),
-                        },
-                    );
-                }
-                Err(e) => {
-                    rl.pair(pair_run_log(
-                        r,
-                        &engine::ScanStats::default(),
-                        &scanned,
-                        before,
-                        t0,
-                        Some(&e),
-                    ));
-                    run_err = Some(e);
-                    break;
-                }
-            }
-        }
-
-        // The cancel token stays flipped once set, so reading it now catches a
-        // cancel observed anywhere in the run (between pairs OR mid-apply of the
-        // last pair) — so a user-cancelled run isn't logged as a clean success.
-        let cancelled = cancel.load(Ordering::Relaxed);
-        rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), cancelled);
-        match run_err {
-            Some(e) => Err(e),
-            None => Ok(reports),
-        }
+        run_execute_loop(
+            app_for_task,
+            run_id_task,
+            job_id_for_paths,
+            resolved,
+            store_dir,
+            app_dir,
+            resolutions,
+            confirm_big_delete,
+            AutoApplyPolicy::Manual,
+            cancel,
+            "Manual".to_string(),
+        )
     })
     .await
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));
@@ -707,6 +476,415 @@ fn cancel_run(run_id: String, state: State<'_, AppState>) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Shared run pipeline bodies (called by the manual commands AND the scheduler)
+//
+// These are the `spawn_blocking` bodies extracted so EVERY run — manual preview,
+// manual execute, and scheduled — goes through the SAME guarded loop. That keeps
+// delete-suppression, the big-delete gate, and baseline-trust uniform (the locked
+// "every run goes through preview -> execute" invariant). `trigger` tags the run
+// ("Manual" | "Schedule"); `policy` selects the interactive-vs-automated apply
+// behavior (conflict deferral, delete deferral — see `AutoApplyPolicy`).
+// ---------------------------------------------------------------------------
+
+/// The preview pair-loop: scan each resolved pair through the unchanged
+/// `engine::preview` (with its own per-(job,pair) baseline), stream live scan /
+/// plan progress off a ticker thread, and write the structured run-log. Runs
+/// INSIDE `spawn_blocking`.
+#[allow(clippy::too_many_arguments)]
+fn run_preview_loop(
+    app: tauri::AppHandle,
+    run_id: String,
+    job_id: String,
+    resolved: Vec<job::ResolvedPair>,
+    store_dir: PathBuf,
+    app_dir: PathBuf,
+    ticker_ms: u64,
+    tree_depth: usize,
+    trigger: String,
+) -> Result<Vec<PairPreview>, SyncError> {
+    let store = store::Store::new(store_dir);
+    // Live scan progress: a shared counter the parallel walk bumps per entry,
+    // polled by a ticker thread that emits run://scan-progress. Cumulative across
+    // the job's pairs; the folder tree (when enabled) tallies per-folder activity.
+    let scanned = Arc::new(AtomicU64::new(0));
+    let tree = (tree_depth > 0).then(|| Arc::new(scan::ScanTree::new(tree_depth)));
+    let plan_progress = Arc::new(plan::PlanProgress::default());
+    let cur_pair = Arc::new(Mutex::new(String::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let ticker = {
+        let app = app.clone();
+        let run_id = run_id.clone();
+        let scanned = scanned.clone();
+        let tree = tree.clone();
+        let plan_progress = plan_progress.clone();
+        let cur_pair = cur_pair.clone();
+        let stop = stop.clone();
+        let tree_every = (200 / ticker_ms.max(1)).max(1);
+        std::thread::spawn(move || {
+            let mut tick: u64 = 0;
+            while !stop.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(ticker_ms));
+                tick += 1;
+                let _ = app.emit(
+                    "run://scan-progress",
+                    RunScanProgress {
+                        run_id: run_id.clone(),
+                        scanned: scanned.load(Ordering::Relaxed),
+                    },
+                );
+                let plan_total = plan_progress.total.load(Ordering::Relaxed);
+                if plan_total > 0 {
+                    let _ = app.emit(
+                        "run://plan-progress",
+                        RunPlanProgress {
+                            run_id: run_id.clone(),
+                            done: plan_progress.done.load(Ordering::Relaxed),
+                            total: plan_total,
+                        },
+                    );
+                }
+                if let Some(t) = &tree {
+                    if tick % tree_every == 0 {
+                        let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
+                        let _ = app.emit(
+                            "run://scan-tree",
+                            RunScanTree {
+                                run_id: run_id.clone(),
+                                pair_id,
+                                folders: scan_tree_folders(t),
+                            },
+                        );
+                    }
+                }
+            }
+        })
+    };
+    let _ticker_guard = TickerGuard { stop: stop.clone() };
+
+    let mut rl = RunLogBuilder::new(&run_id, &job_id, "preview", &trigger, resolved.len());
+    let mut pairs = Vec::with_capacity(resolved.len());
+    let mut run_err: Option<SyncError> = None;
+
+    for r in &resolved {
+        if let Some(t) = &tree {
+            t.clear();
+        }
+        plan_progress.done.store(0, Ordering::Relaxed);
+        plan_progress.total.store(0, Ordering::Relaxed);
+        if let Ok(mut g) = cur_pair.lock() {
+            r.pair_id.clone_into(&mut g);
+        }
+        let _ = app.emit(
+            "run://scan",
+            RunScan {
+                run_id: run_id.clone(),
+                pair_id: r.pair_id.clone(),
+                phase: "Scanning".into(),
+            },
+        );
+        let before = scanned.load(Ordering::Relaxed);
+        let t0 = Instant::now();
+        let bpath = store.pair_baseline_path(&job_id, &r.pair_id);
+        let status = engine::baseline_status(&bpath);
+        match engine::preview_counted_stats(
+            &r.config,
+            &bpath,
+            &scanned,
+            tree.as_deref(),
+            Some(&plan_progress),
+        ) {
+            Ok((plan, stats)) => {
+                rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
+                pairs.push(PairPreview {
+                    pair_id: r.pair_id.clone(),
+                    plan,
+                    baseline_status: status,
+                });
+                let _ = app.emit(
+                    "run://pair-done",
+                    RunPairDone {
+                        run_id: run_id.clone(),
+                        pair_id: r.pair_id.clone(),
+                    },
+                );
+            }
+            Err(e) => {
+                rl.pair(pair_run_log(
+                    r,
+                    &engine::ScanStats::default(),
+                    &scanned,
+                    before,
+                    t0,
+                    Some(&e),
+                ));
+                run_err = Some(e);
+                break;
+            }
+        }
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = ticker.join();
+    let _ = app.emit(
+        "run://scan-progress",
+        RunScanProgress {
+            run_id: run_id.clone(),
+            scanned: scanned.load(Ordering::Relaxed),
+        },
+    );
+    if let Some(t) = &tree {
+        let pair_id = cur_pair.lock().map(|g| g.clone()).unwrap_or_default();
+        let _ = app.emit(
+            "run://scan-tree",
+            RunScanTree {
+                run_id: run_id.clone(),
+                pair_id,
+                folders: scan_tree_folders(t),
+            },
+        );
+    }
+    rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), false);
+    match run_err {
+        Some(e) => Err(e),
+        None => Ok(pairs),
+    }
+}
+
+/// The execute pair-loop: RE-SCAN + apply each resolved pair through the unchanged
+/// `engine::execute` under `policy`, stream `run://progress`, and write the run-log.
+/// Runs INSIDE `spawn_blocking`. A flipped `cancel` breaks at the next pair/item
+/// boundary and marks the run cancelled.
+#[allow(clippy::too_many_arguments)]
+fn run_execute_loop(
+    app: tauri::AppHandle,
+    run_id: String,
+    job_id: String,
+    resolved: Vec<job::ResolvedPair>,
+    store_dir: PathBuf,
+    app_dir: PathBuf,
+    resolutions: HashMap<String, HashMap<String, Resolution>>,
+    confirm_big_delete: HashMap<String, bool>,
+    policy: AutoApplyPolicy,
+    cancel: Arc<AtomicBool>,
+    trigger: String,
+) -> Result<Vec<PairReport>, SyncError> {
+    let store = store::Store::new(store_dir);
+    let pair_count = resolved.len();
+    let scanned = Arc::new(AtomicU64::new(0));
+    let mut rl = RunLogBuilder::new(&run_id, &job_id, "execute", &trigger, resolved.len());
+    let mut reports = Vec::with_capacity(resolved.len());
+    let mut run_err: Option<SyncError> = None;
+
+    for (pair_index, r) in resolved.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let _ = app.emit(
+            "run://scan",
+            RunScan {
+                run_id: run_id.clone(),
+                pair_id: r.pair_id.clone(),
+                phase: "Scanning".into(),
+            },
+        );
+        let before = scanned.load(Ordering::Relaxed);
+        let t0 = Instant::now();
+        let bpath = store.pair_baseline_path(&job_id, &r.pair_id);
+        let res_for_pair = resolutions.get(&r.pair_id).cloned().unwrap_or_default();
+        let confirm = confirm_big_delete.get(&r.pair_id).copied().unwrap_or(false);
+
+        let pair_id = r.pair_id.clone();
+        let run_id_p = run_id.clone();
+        let app_p = app.clone();
+        match engine::execute_counted_stats(
+            &r.config,
+            &bpath,
+            &res_for_pair,
+            policy,
+            confirm,
+            &cancel,
+            &scanned,
+            move |p| {
+                let _ = app_p.emit(
+                    "run://progress",
+                    RunProgress {
+                        run_id: run_id_p.clone(),
+                        pair_id: pair_id.clone(),
+                        pair_index,
+                        pair_count,
+                        done: p.done,
+                        total: p.total,
+                        path: p.path,
+                        action: p.action,
+                    },
+                );
+            },
+        ) {
+            Ok((report, stats)) => {
+                rl.pair(pair_run_log(r, &stats, &scanned, before, t0, None));
+                reports.push(PairReport {
+                    pair_id: r.pair_id.clone(),
+                    report,
+                });
+                let _ = app.emit(
+                    "run://pair-done",
+                    RunPairDone {
+                        run_id: run_id.clone(),
+                        pair_id: r.pair_id.clone(),
+                    },
+                );
+            }
+            Err(e) => {
+                rl.pair(pair_run_log(
+                    r,
+                    &engine::ScanStats::default(),
+                    &scanned,
+                    before,
+                    t0,
+                    Some(&e),
+                ));
+                run_err = Some(e);
+                break;
+            }
+        }
+    }
+
+    let cancelled = cancel.load(Ordering::Relaxed);
+    rl.finish(&app_dir, run_err.as_ref().map(|e| e.to_string()), cancelled);
+    match run_err {
+        Some(e) => Err(e),
+        None => Ok(reports),
+    }
+}
+
+/// Fire a scheduled (unattended) run for `job_id` under `cfg`, routed through the
+/// SAME guarded pipeline as a manual run. Claims the single run slot; if a run
+/// already holds it this occurrence is SKIPPED (logged), never queued. Conflicts
+/// are never auto-resolved (the pipeline defers them); a big-delete trip aborts an
+/// `ApplyAll` run because automated runs never set the confirm flag. Best-effort:
+/// errors are logged (and captured in the run-log), never propagated to the caller.
+pub(crate) async fn auto_run_job(app: tauri::AppHandle, job_id: String, cfg: job::ScheduleConfig) {
+    // Pull what we need out of managed state as owned clones so no State borrow is
+    // held across the .await below.
+    let (store_dir, app_dir, runs, resolved, ticker_ms, tree_depth) = {
+        let state = app.state::<AppState>();
+        let job = match state.store.load(&job_id) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::warn!(job = %job_id, error = %e, "scheduled run: job load failed");
+                return;
+            }
+        };
+        let mut resolved = select_pairs(&job, &None);
+        let (ticker_ms, tree_depth) = {
+            let s = state.settings.lock().unwrap();
+            apply_global_defaults(&mut resolved, &s);
+            (s.ticker_ms(), s.tree_depth())
+        };
+        (
+            state.state_dir.clone(),
+            state.app_dir.clone(),
+            state.runs.clone(),
+            resolved,
+            ticker_ms,
+            tree_depth,
+        )
+    };
+
+    if resolved.is_empty() {
+        tracing::info!(job = %job_id, "scheduled run: no enabled local pairs; skipping");
+        return;
+    }
+
+    let handle = match runs.try_start(RunDescriptor {
+        job_id: job_id.clone(),
+        pair_ids: resolved.iter().map(|r| r.pair_id.clone()).collect(),
+    }) {
+        Ok(h) => h,
+        Err(RunError::Busy { run_id }) => {
+            tracing::info!(job = %job_id, holding = %run_id, "scheduled run skipped: a run already holds the slot");
+            return;
+        }
+    };
+    let run_id = handle.run_id.clone();
+    let cancel = handle.cancel_token();
+    let trigger = "Schedule".to_string();
+    let preview_only = cfg.policy.is_preview_only();
+    let policy = cfg.policy.auto_apply();
+
+    let _ = app.emit(
+        "run://started",
+        RunStarted {
+            run_id: run_id.clone(),
+            job_id: job_id.clone(),
+            pair_count: resolved.len(),
+            trigger: trigger.clone(),
+        },
+    );
+    let _ = app.emit(
+        "schedule://tick",
+        ScheduleTick {
+            job_id: job_id.clone(),
+            run_id: run_id.clone(),
+            policy: format!("{:?}", cfg.policy),
+        },
+    );
+
+    let app_for_task = app.clone();
+    let run_id_task = run_id.clone();
+    let job_id_task = job_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        if preview_only {
+            run_preview_loop(
+                app_for_task,
+                run_id_task,
+                job_id_task,
+                resolved,
+                store_dir,
+                app_dir,
+                ticker_ms,
+                tree_depth,
+                trigger,
+            )
+            .map(|_| ())
+        } else {
+            run_execute_loop(
+                app_for_task,
+                run_id_task,
+                job_id_task,
+                resolved,
+                store_dir,
+                app_dir,
+                HashMap::new(),
+                HashMap::new(),
+                policy,
+                cancel,
+                trigger,
+            )
+            .map(|_| ())
+        }
+    })
+    .await;
+
+    runs.finish(&run_id);
+    let _ = app.emit(
+        "run://finished",
+        RunFinished {
+            run_id: run_id.clone(),
+        },
+    );
+    match result {
+        Ok(Ok(())) => tracing::info!(job = %job_id, run = %run_id, "scheduled run finished"),
+        Ok(Err(e)) => {
+            tracing::warn!(job = %job_id, run = %run_id, error = %e, "scheduled run failed")
+        }
+        Err(e) => {
+            tracing::error!(job = %job_id, run = %run_id, error = %e, "scheduled run task panicked")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Global settings
 // ---------------------------------------------------------------------------
 
@@ -723,10 +901,14 @@ fn get_settings(state: State<'_, AppState>) -> Settings {
 fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<Settings, SyncError> {
     let saved = settings::save(&state.app_dir, &settings)?;
     *state.settings.lock().unwrap() = saved.clone();
+    // Keep the running scheduler's master switch in sync with the persisted value
+    // (takes effect immediately; a still-running job is unaffected).
+    state.scheduler.set_enabled(saved.scheduler_enabled);
     tracing::info!(
         scan_threads = saved.scan_threads,
         mtime_gran_ms = saved.mtime_gran_ms,
         scan_ticker_ms = saved.scan_ticker_ms,
+        scheduler_enabled = saved.scheduler_enabled,
         log_level = %saved.log_level,
         "settings saved"
     );
@@ -747,6 +929,142 @@ const ACTIVITY_LIMIT: usize = 500;
 #[tauri::command]
 fn list_activity(state: State<'_, AppState>) -> Vec<runlog::RunLog> {
     runlog::read_run_log(&state.app_dir, ACTIVITY_LIMIT)
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling
+// ---------------------------------------------------------------------------
+
+/// A job's schedule as surfaced to the Schedules screen: the owning job + its cron
+/// config + the next computed fire (RFC3339 UTC), so the UI shows cross-job
+/// next-run ordering without re-implementing cron.
+#[derive(Serialize)]
+struct ScheduleView {
+    job_id: String,
+    job_name: String,
+    schedule: job::ScheduleConfig,
+    /// Next fire as RFC3339 UTC; `None` when paused, unparseable, or unsatisfiable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_run: Option<String>,
+}
+
+/// Validate a cron string, mapping a parse error to a user-facing `InvalidJob`.
+fn validate_cron(expr: &str) -> Result<(), SyncError> {
+    cron::Cron::parse(expr)
+        .map(|_| ())
+        .map_err(|e| SyncError::InvalidJob(format!("invalid cron expression: {e}")))
+}
+
+/// Attach or replace a job's cron schedule. Validates the cron up front so a bad
+/// expression is rejected at save time (never a schedule that silently never
+/// fires). Wakes the scheduler to pick it up immediately. Returns the saved job.
+#[tauri::command]
+fn set_schedule(
+    job_id: String,
+    schedule: job::ScheduleConfig,
+    state: State<'_, AppState>,
+) -> Result<Job, SyncError> {
+    validate_cron(&schedule.cron)?;
+    let mut job = state.store.load(&job_id)?;
+    let mut automation = job.automation.take().unwrap_or_default();
+    automation.schedule = Some(schedule);
+    job.automation = Some(automation);
+    let saved = state.store.save(&job)?;
+    state.scheduler.poke();
+    Ok(saved)
+}
+
+/// Remove a job's schedule entirely (drops an otherwise-empty automation object).
+#[tauri::command]
+fn clear_schedule(job_id: String, state: State<'_, AppState>) -> Result<Job, SyncError> {
+    let mut job = state.store.load(&job_id)?;
+    if let Some(a) = job.automation.as_mut() {
+        a.schedule = None;
+    }
+    if matches!(&job.automation, Some(a) if a.schedule.is_none()) {
+        job.automation = None;
+    }
+    let saved = state.store.save(&job)?;
+    state.scheduler.poke();
+    Ok(saved)
+}
+
+/// Pause or resume a job's schedule without discarding its cron.
+#[tauri::command]
+fn pause_schedule(
+    job_id: String,
+    paused: bool,
+    state: State<'_, AppState>,
+) -> Result<Job, SyncError> {
+    let mut job = state.store.load(&job_id)?;
+    match job.automation.as_mut().and_then(|a| a.schedule.as_mut()) {
+        Some(s) => s.enabled = !paused,
+        None => return Err(SyncError::InvalidJob("job has no schedule to pause".into())),
+    }
+    let saved = state.store.save(&job)?;
+    state.scheduler.poke();
+    Ok(saved)
+}
+
+/// Every job's schedule with its next computed fire, soonest-first (paused/unset
+/// sort last). The cross-job lens the Schedules screen renders.
+#[tauri::command]
+fn list_schedules(state: State<'_, AppState>) -> Vec<ScheduleView> {
+    let now = timeutil::now_unix();
+    let mut views: Vec<ScheduleView> = state
+        .store
+        .list()
+        .into_iter()
+        .filter_map(|job| {
+            let schedule = job.automation.as_ref()?.schedule.clone()?;
+            let next_run = if schedule.enabled {
+                cron::Cron::parse(&schedule.cron)
+                    .ok()
+                    .and_then(|c| c.next_after(now, schedule.tz_offset_minutes.unwrap_or(0)))
+                    .map(timeutil::rfc3339_from_unix_secs)
+            } else {
+                None
+            };
+            Some(ScheduleView {
+                job_id: job.id,
+                job_name: job.name,
+                schedule,
+                next_run,
+            })
+        })
+        .collect();
+    views.sort_by(|a, b| match (&a.next_run, &b.next_run) {
+        (Some(x), Some(y)) => x.cmp(y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    views
+}
+
+/// Fire a job's scheduled run immediately (the "Run now" button), regardless of its
+/// cron time, using its configured policy. Routes through the same guarded
+/// `auto_run_job` pipeline. A job without a schedule runs once with the default
+/// policy. Skipped (logged) if a run already holds the slot.
+#[tauri::command]
+async fn run_schedule_now(
+    app: tauri::AppHandle,
+    job_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), SyncError> {
+    let job = state.store.load(&job_id)?;
+    let cfg = job
+        .automation
+        .and_then(|a| a.schedule)
+        .unwrap_or_else(|| job::ScheduleConfig {
+            enabled: true,
+            cron: "0 0 * * *".into(),
+            tz_offset_minutes: None,
+            policy: job::SchedulePolicy::default(),
+            skip_if_watched: false,
+        });
+    auto_run_job(app, job_id, cfg).await;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -783,14 +1101,21 @@ pub fn run() {
             let _ = std::fs::create_dir_all(&state_dir);
 
             tracing::info!(app_dir = %app_dir.display(), "fast-file-sync starting");
+            let scheduler_enabled = settings.scheduler_enabled;
             app.manage(AppState {
                 store: store::Store::new(state_dir.clone()),
                 app_dir,
                 state_dir,
                 runs: Arc::new(RunRegistry::new()),
                 settings: Mutex::new(settings),
+                scheduler: scheduler::Scheduler::new(scheduler_enabled),
                 _log_guard: log_guard,
             });
+            // Start the background cron scheduler now that AppState is managed (the
+            // loop reads jobs + settings out of managed state each tick).
+            app.state::<AppState>()
+                .scheduler
+                .spawn_loop(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -806,6 +1131,11 @@ pub fn run() {
             get_settings,
             save_settings,
             list_activity,
+            set_schedule,
+            clear_schedule,
+            pause_schedule,
+            list_schedules,
+            run_schedule_now,
             import_ffs
         ])
         .run(tauri::generate_context!())

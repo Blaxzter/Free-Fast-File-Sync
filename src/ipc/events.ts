@@ -16,6 +16,7 @@ import {
   zRunScanProgress,
   zRunScanTree,
   zRunStarted,
+  zScheduleTick,
 } from "../domain/schemas";
 import type {
   RunFinished,
@@ -26,6 +27,7 @@ import type {
   RunScanProgress,
   RunScanTree,
   RunStarted,
+  ScheduleTick,
 } from "./bindings";
 
 /** A run claimed the slot; pairs are about to be scanned/applied. */
@@ -89,6 +91,16 @@ export function onRunPairDone(cb: (e: RunPairDone) => void): Promise<UnlistenFn>
 export function onRunFinished(cb: (e: RunFinished) => void): Promise<UnlistenFn> {
   return listen<unknown>("run://finished", (e) => {
     const parsed = zRunFinished.safeParse(e.payload);
+    if (parsed.success) cb(parsed.data);
+  });
+}
+
+/** The scheduler fired a job (right before its run starts). Distinct from
+ * run://started (which every trigger emits) so a view can react to scheduled runs
+ * specifically. */
+export function onScheduleTick(cb: (e: ScheduleTick) => void): Promise<UnlistenFn> {
+  return listen<unknown>("schedule://tick", (e) => {
+    const parsed = zScheduleTick.safeParse(e.payload);
     if (parsed.success) cb(parsed.data);
   });
 }

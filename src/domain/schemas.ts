@@ -169,6 +169,8 @@ export const zSettings = z.object({
   scan_ticker_ms: z.number().int().nonnegative(),
   scan_tree_depth: z.number().int().nonnegative(),
   log_level: z.string(),
+  // serde(default = true) on the Rust side; default it so an older settings.json parses.
+  scheduler_enabled: z.boolean().default(true),
 });
 
 export const zFolderPair = z.object({
@@ -183,6 +185,21 @@ export const zFolderPair = z.object({
   big_delete_override: zBigDeleteGuard.optional(),
 });
 
+export const zSchedulePolicy = z.enum(["PreviewOnly", "ApplySafe", "ApplyAll"]);
+
+export const zScheduleConfig = z.object({
+  enabled: z.boolean(),
+  cron: z.string(),
+  tz_offset_minutes: z.number().int().optional(),
+  policy: zSchedulePolicy,
+  // serde(default) on the Rust side; default it so an older job.json still parses.
+  skip_if_watched: z.boolean().default(false),
+});
+
+export const zJobAutomation = z.object({
+  schedule: zScheduleConfig.optional(),
+});
+
 export const zJob = z.object({
   id: z.string(),
   name: z.string(),
@@ -191,6 +208,7 @@ export const zJob = z.object({
   updated_at: z.string(),
   settings: zJobSettings,
   pairs: z.array(zFolderPair),
+  automation: zJobAutomation.optional(),
 });
 
 // ---- lib.rs multi-pair run surface ----
@@ -271,6 +289,21 @@ export const zRunPlanProgress = z.object({
   run_id: z.string(),
   done: z.number(),
   total: z.number(),
+});
+
+// ---- lib.rs scheduling ----
+
+export const zScheduleView = z.object({
+  job_id: z.string(),
+  job_name: z.string(),
+  schedule: zScheduleConfig,
+  next_run: z.string().optional(),
+});
+
+export const zScheduleTick = z.object({
+  job_id: z.string(),
+  run_id: z.string(),
+  policy: z.string(),
 });
 
 // ---- runlog.rs (Activity / run history) ----

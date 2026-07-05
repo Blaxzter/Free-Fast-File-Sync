@@ -161,6 +161,22 @@ export function SettingsGeneral() {
       </div>
 
       <div className={s.section}>
+        <span className={s.sectionTitle}>Scheduling</span>
+        <span className={s.sectionDesc}>
+          Master switch for the background cron scheduler. When off, no job&apos;s schedule fires —
+          a global pause across every job. Each job&apos;s schedule also has its own enable toggle
+          on the Schedules screen.
+        </span>
+        {form != null && (
+          <Toggle
+            label="Run scheduled syncs in the background"
+            checked={form.scheduler_enabled}
+            onChange={(v) => set("scheduler_enabled", v)}
+          />
+        )}
+      </div>
+
+      <div className={s.section}>
         <span className={s.sectionTitle}>Diagnostics</span>
         <span className={s.sectionDesc}>
           A rolling diagnostic log and a per-run record are written under the app data folder. Raise

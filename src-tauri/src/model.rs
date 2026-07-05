@@ -112,6 +112,38 @@ pub enum Resolution {
     Skip,
 }
 
+/// How the apply loop treats conflicts and deletes — the seam that lets an
+/// UNATTENDED run (schedule/watch) apply safe changes while NEVER auto-resolving
+/// a conflict, without touching the reconcile truth table.
+///
+/// The interactive path uses `Manual`: honor the user's resolutions map, else the
+/// recommended `default_resolution`, else `Skip`. Automated policies force EVERY
+/// conflict to `Skip` regardless of its `default_resolution` (the locked
+/// "conflicts are never auto-applied" invariant), because the plan pre-fills a
+/// non-`Skip` default per conflict (e.g. ModifyDelete → KeepModified) that an
+/// empty resolutions map would otherwise silently apply. `ApplySafe` additionally
+/// defers (never applies) deletes; `ApplyAll` applies deletes normally (a
+/// big-delete trip is still gated by `confirm_big_delete`, which automated runs
+/// never set — so a big delete aborts the run instead of being auto-confirmed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AutoApplyPolicy {
+    #[default]
+    Manual,
+    ApplyAll,
+    ApplySafe,
+}
+
+impl AutoApplyPolicy {
+    /// Automated policies never auto-resolve a conflict (ignore `default_resolution`).
+    pub fn defers_conflicts(&self) -> bool {
+        !matches!(self, AutoApplyPolicy::Manual)
+    }
+    /// `ApplySafe` additionally defers (never applies) deletes.
+    pub fn defers_deletes(&self) -> bool {
+        matches!(self, AutoApplyPolicy::ApplySafe)
+    }
+}
+
 /// One reconciliation decision (the action plus an optional conflict tag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Decision {

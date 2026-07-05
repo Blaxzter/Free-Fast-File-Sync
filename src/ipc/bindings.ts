@@ -182,6 +182,29 @@ export interface FolderPair {
   big_delete_override?: BigDeleteGuard;
 }
 
+/** What an unattended scheduled run may do (job.rs SchedulePolicy). Conflicts are
+ * NEVER auto-resolved under any policy; this governs the safe changes + deletes. */
+export type SchedulePolicy = "PreviewOnly" | "ApplySafe" | "ApplyAll";
+
+/** A job's cron schedule (job.rs ScheduleConfig). */
+export interface ScheduleConfig {
+  /** A paused schedule is retained but never fires. */
+  enabled: boolean;
+  /** Standard 5-field cron: "minute hour day-of-month month day-of-week". */
+  cron: string;
+  /** The user's UTC offset in MINUTES at save time so the cron fires at local
+   * wall-clock. Omitted => evaluate in UTC. */
+  tz_offset_minutes?: number;
+  policy: SchedulePolicy;
+  /** Reserved for the Phase 2 watcher (inert until Watch lands). */
+  skip_if_watched: boolean;
+}
+
+/** Per-job automation slot (job.rs JobAutomation). Only `schedule` is wired today. */
+export interface JobAutomation {
+  schedule?: ScheduleConfig;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -190,6 +213,8 @@ export interface Job {
   updated_at: string;
   settings: JobSettings;
   pairs: FolderPair[];
+  /** Scheduling / (later) watch automation. Omitted => none configured. */
+  automation?: JobAutomation;
 }
 
 // ---- settings.rs (global, user-facing defaults) ----
@@ -207,6 +232,9 @@ export interface Settings {
   scan_tree_depth: number;
   /** tracing filter directive for the diagnostic log ("info", "debug", …). */
   log_level: string;
+  /** Master switch for the background cron scheduler. When false, NO job's schedule
+   * fires (global pause); per-schedule `enabled` is the finer control. Default on. */
+  scheduler_enabled: boolean;
 }
 
 // ---- lib.rs multi-pair run surface ----
@@ -299,6 +327,27 @@ export interface RunPlanProgress {
   run_id: string;
   done: number;
   total: number;
+}
+
+// ---- lib.rs scheduling ----
+
+/** One job's schedule + its next computed fire (lib.rs ScheduleView), from
+ * list_schedules. Returned soonest-first; paused/unparseable have no next_run. */
+export interface ScheduleView {
+  job_id: string;
+  job_name: string;
+  schedule: ScheduleConfig;
+  /** Next fire as RFC3339 UTC; omitted when paused / unparseable / unsatisfiable. */
+  next_run?: string;
+}
+
+/** schedule://tick event (lib.rs ScheduleTick), emitted when the scheduler fires a
+ * job right before its run starts. */
+export interface ScheduleTick {
+  job_id: string;
+  run_id: string;
+  /** The schedule's apply policy string ("PreviewOnly" | "ApplySafe" | "ApplyAll"). */
+  policy: string;
 }
 
 // ---- runlog.rs (Activity / run history) ----

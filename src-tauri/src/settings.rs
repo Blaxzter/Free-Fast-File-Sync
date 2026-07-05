@@ -38,6 +38,11 @@ pub struct Settings {
     /// `"fast_file_sync_lib=debug"`, …). Applied at startup; `RUST_LOG` overrides.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Master switch for the background cron scheduler. When `false`, no job's
+    /// `automation.schedule` ever fires (a global pause across all jobs);
+    /// per-schedule `enabled` is the finer-grained control. Default on.
+    #[serde(default = "default_true")]
+    pub scheduler_enabled: bool,
 }
 
 fn default_ticker_ms() -> u64 {
@@ -49,6 +54,9 @@ fn default_scan_tree_depth() -> usize {
 fn default_log_level() -> String {
     "info".to_string()
 }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -58,6 +66,7 @@ impl Default for Settings {
             scan_ticker_ms: default_ticker_ms(),
             scan_tree_depth: default_scan_tree_depth(),
             log_level: default_log_level(),
+            scheduler_enabled: true,
         }
     }
 }
@@ -163,6 +172,7 @@ mod tests {
             scan_ticker_ms: 250,
             scan_tree_depth: 2,
             log_level: "debug".into(),
+            scheduler_enabled: false,
         };
         let saved = save(dir.path(), &s).unwrap();
         assert_eq!(saved, s);
