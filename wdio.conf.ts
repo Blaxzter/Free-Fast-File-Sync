@@ -57,6 +57,13 @@ export const config: WebdriverIO.Config = {
   runner: "local",
   specs: ["./e2e-native/**/*.e2e.ts"],
   maxInstances: 1,
+  // We manage the driver ourselves (beforeSession spawns tauri-driver on :4444).
+  // Without an explicit hostname/port WDIO >=8 tries to download+start a driver
+  // for `browserName` itself and dies with `Unknown browser name "wry"`; setting
+  // them marks the driver as remote/user-managed so WDIO just connects.
+  hostname: "127.0.0.1",
+  port: 4444,
+  path: "/",
   capabilities: [
     {
       // tauri-driver's custom capability points at the app binary.
@@ -71,6 +78,9 @@ export const config: WebdriverIO.Config = {
         },
       },
       "wdio:maxInstances": 1,
+      // tauri-driver speaks classic WebDriver only; without this WDIO >=9 asks for
+      // a BiDi session (webSocketUrl: true) that it cannot proxy.
+      "wdio:enforceWebDriverClassic": true,
       browserName: "wry",
     },
   ],
