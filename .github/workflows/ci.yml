@@ -7,6 +7,9 @@ on:
   schedule:
     # Nightly Tier-2 native E2E (Windows-only). 03:17 UTC.
     - cron: "17 3 * * *"
+  # Lets the nightly-only Tier-2 job be run on demand from any branch — otherwise
+  # it is only ever exercised by the 03:17 cron and can rot unseen.
+  workflow_dispatch:
 
 # Windows-first project: tauri-driver native E2E only runs on Windows/Linux and
 # never on macOS, so the whole matrix is windows-latest. macOS coverage comes
@@ -45,7 +48,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -101,7 +104,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -138,7 +141,7 @@ jobs:
   native:
     name: nightly Tier-2 (WDIO + tauri-driver)
     runs-on: windows-latest
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -159,7 +162,7 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
