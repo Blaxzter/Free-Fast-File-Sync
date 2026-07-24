@@ -21,7 +21,7 @@
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -33,6 +33,12 @@ const APP_BINARY = join(
   "debug",
   process.platform === "win32" ? "fast-file-sync.exe" : "fast-file-sync",
 );
+
+// Tauri pins the WebView2 user-data folder to %LOCALAPPDATA%\<identifier>;
+// derive the identifier from tauri.conf.json so this cannot rot against it.
+const TAURI_IDENTIFIER: string = JSON.parse(
+  readFileSync(join(process.cwd(), "src-tauri", "tauri.conf.json"), "utf-8"),
+).identifier;
 
 // Two seeded temp dirs so the smoke test has a real A/B to sync. Recorded on
 // globalThis so the spec can read the paths it must operate on.
@@ -66,15 +72,22 @@ export const config: WebdriverIO.Config = {
   path: "/",
   capabilities: [
     {
-      // tauri-driver's custom capability points at the app binary.
+      // tauri-driver's custom capability points at the app binary. It supports
+      // ONLY {application, args, webviewOptions} on Windows — anything else
+      // (e.g. an `env` map) is silently dropped, so the seeded dirs travel to
+      // the spec via globalThis.__E2E_SEED__ instead.
       // @ts-expect-error tauri:options is a tauri-driver extension capability.
       "tauri:options": {
         application: APP_BINARY,
-        // Pass the seeded dirs to the app via args/env so the run is hermetic.
-        env: {
-          FFS_E2E_DIR_A: dirA,
-          FFS_E2E_DIR_B: dirB,
-          FFS_E2E_SEED_ROOT: seedRoot,
+        // Forwarded verbatim as ms:edgeOptions.webviewOptions. Without
+        // userDataFolder, msedgedriver invents a TEMP user-data folder and
+        // watches it for the DevToolsActivePort file — but Tauri points the
+        // webview at %LOCALAPPDATA%\<identifier> programmatically, so the port
+        // file lands there and session creation times out with "session not
+        // created: DevToolsActivePort file doesn't exist". Aim the driver at
+        // the folder the app actually uses.
+        webviewOptions: {
+          userDataFolder: join(process.env.LOCALAPPDATA ?? "", TAURI_IDENTIFIER),
         },
       },
       "wdio:maxInstances": 1,

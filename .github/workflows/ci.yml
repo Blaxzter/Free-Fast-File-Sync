@@ -260,32 +260,46 @@ jobs:
           }
           Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
           Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Write-Host '--- WebView2 user-data dirs next to the exe:'
-          Get-ChildItem "$env:GITHUB_WORKSPACE\src-tauri\target\debug" -Filter '*WebView2*' -ErrorAction SilentlyContinue |
-            Out-String | Write-Host
+          Write-Host '--- WebView2 user-data dir the app actually used:'
+          $udfRoot = "$env:LOCALAPPDATA\com.fabraham.fastfilesync"
+          Get-ChildItem $udfRoot -Recurse -Depth 1 -ErrorAction SilentlyContinue |
+            Select-Object FullName | Out-String | Write-Host
 
           Write-Host '=== B: direct msedgedriver webview2 session (no tauri-driver) ==='
           $log = Join-Path $env:RUNNER_TEMP 'edgedriver-verbose.log'
           $drv = Start-Process -FilePath $env:MSEDGEDRIVER_PATH -ArgumentList '--port=9515', "--log-path=$log", '--verbose' -PassThru
           Start-Sleep 2
-          $caps = @{ capabilities = @{ alwaysMatch = @{
-            browserName      = 'webview2'
-            'ms:edgeOptions' = @{ binary = $exe }
-          } } } | ConvertTo-Json -Depth 6
-          try {
-            $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:9515/session' -Method Post -Body $caps -ContentType 'application/json' -TimeoutSec 120
-            Write-Host "SESSION OK: $($resp | ConvertTo-Json -Depth 6 -Compress)"
-            $sid = $resp.value.sessionId
-            if ($sid) { Invoke-RestMethod -Uri "http://127.0.0.1:9515/session/$sid" -Method Delete | Out-Null }
-          } catch {
-            Write-Host "SESSION FAILED: $($_.Exception.Message)"
-            if ($_.ErrorDetails.Message) { Write-Host "BODY: $($_.ErrorDetails.Message)" }
+          function Test-Webview2Session([string]$udf) {
+            $opts = @{ binary = $exe }
+            if ($udf) { $opts.webviewOptions = @{ userDataFolder = $udf } }
+            $caps = @{ capabilities = @{ alwaysMatch = @{
+              browserName      = 'webview2'
+              'ms:edgeOptions' = $opts
+            } } } | ConvertTo-Json -Depth 8
+            try {
+              $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:9515/session' -Method Post -Body $caps -ContentType 'application/json' -TimeoutSec 120
+              Write-Host "SESSION OK (udf='$udf')"
+              $sid = $resp.value.sessionId
+              if ($sid) { Invoke-RestMethod -Uri "http://127.0.0.1:9515/session/$sid" -Method Delete | Out-Null }
+              return $true
+            } catch {
+              Write-Host "SESSION FAILED (udf='$udf'): $($_.Exception.Message)"
+              if ($_.ErrorDetails.Message) { Write-Host "BODY: $($_.ErrorDetails.Message)" }
+              return $false
+            } finally {
+              Get-Process msedgewebview2, fast-file-sync -ErrorAction SilentlyContinue |
+                Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+          }
+          # B1: the folder Tauri passes programmatically (app local data dir).
+          # B2 fallback: its EBWebView subfolder, in case the driver watches the
+          # given path verbatim instead of appending EBWebView itself.
+          if (-not (Test-Webview2Session $udfRoot)) {
+            Test-Webview2Session "$udfRoot\EBWebView" | Out-Null
           }
           Stop-Process -Id $drv.Id -Force -ErrorAction SilentlyContinue
-          Get-Process msedgewebview2, fast-file-sync -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
           Write-Host '=== msedgedriver verbose log (tail) ==='
-          if (Test-Path $log) { Get-Content $log -Tail 150 | Write-Host } else { Write-Host 'no driver log written' }
+          if (Test-Path $log) { Get-Content $log -Tail 200 | Write-Host } else { Write-Host 'no driver log written' }
 
       - name: Tier-2 WDIO native smoke
         run: pnpm e2e:native
