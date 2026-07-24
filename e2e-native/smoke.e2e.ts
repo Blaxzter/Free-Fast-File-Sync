@@ -19,6 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { BaseDirectory } from "@tauri-apps/api/path";
 import { zPreviewJobResult } from "../src/domain/schemas";
 
 interface Seed {
@@ -28,27 +29,23 @@ interface Seed {
 }
 const seed = (globalThis as Record<string, unknown>).__E2E_SEED__ as Seed;
 
-/** Find baseline.json anywhere under the engine's app-data jobs tree. The exact
- * root is OS-specific (AppData on Windows); we resolve it from the app rather
- * than hardcode it, by scanning for the documented layout
- * jobs/<jobId>/pairs/<pairId>/baseline.json. */
-function findBaselineJson(root: string): string | undefined {
-  if (!existsSync(root)) return undefined;
+/** List every baseline.json under `root`, for a diagnostic message when the
+ * documented layout assertion fails (shows what the engine actually wrote). */
+function listBaselines(root: string, depth = 6): string[] {
+  if (depth === 0 || !existsSync(root)) return [];
+  const hits: string[] = [];
   for (const entry of readdirSync(root)) {
     const p = join(root, entry);
-    let st;
+    let st: ReturnType<typeof statSync>;
     try {
       st = statSync(p);
     } catch {
       continue;
     }
-    if (entry === "baseline.json" && st.isFile()) return p;
-    if (st.isDirectory()) {
-      const hit = findBaselineJson(p);
-      if (hit) return hit;
-    }
+    if (entry === "baseline.json" && st.isFile()) hits.push(p);
+    else if (st.isDirectory()) hits.push(...listBaselines(p, depth - 1));
   }
-  return undefined;
+  return hits;
 }
 
 /** Evaluate an invoke inside the webview so we exercise the REAL command +
@@ -141,25 +138,28 @@ describe("native smoke (real engine)", () => {
     // The seed file copied A -> B.
     expect(existsSync(join(seed.dirB, "hello.txt"))).toBe(true);
 
-    // The engine persisted a baseline for this pair (jobs/<jobId>/pairs/<pairId>/
-    // baseline.json). Resolve the app-data root from the app then assert layout.
-    const appDataDir = await browser.execute(
-      () =>
-        (
-          window as unknown as {
-            __TAURI_INTERNALS__: { invoke: (c: string, a: unknown) => Promise<unknown> };
-          }
-        ).__TAURI_INTERNALS__.invoke("plugin:path|resolve_directory", { directory: 12 }), // AppData
-    );
-    const root = typeof appDataDir === "string" ? appDataDir : seed.seedRoot;
-    const baseline = findBaselineJson(root) ?? findBaselineJson(seed.seedRoot);
-    // jobs/<jobId>/pairs/<pairId>/baseline.json must exist on disk.
-    expect(baseline).toBeDefined();
-    if (baseline) {
-      expect(baseline).toContain(join("pairs", pairId));
-      // It's valid JSON.
-      JSON.parse(readFileSync(baseline, "utf-8"));
+    // The engine persisted a baseline for this pair. Resolve the app-data root
+    // from the app itself — BaseDirectory.AppData by NAME, never a raw enum
+    // number (those shift between Tauri versions; 12 is Temp, not AppData).
+    const appDataDir = await invokeInApp<string>("plugin:path|resolve_directory", {
+      directory: BaseDirectory.AppData,
+    });
+    expect(typeof appDataDir).toBe("string");
+
+    // Assert the DOCUMENTED layout, not merely "a baseline exists somewhere":
+    // <appData>/jobs/<jobId>/pairs/<pairId>/baseline.json. The path is derived
+    // from the stable ULIDs, so an orphaned baseline (silent FirstSync +
+    // suppressed deletes) shows up here as a miss.
+    const baseline = join(appDataDir, "jobs", jobId, "pairs", pairId, "baseline.json");
+    if (!existsSync(baseline)) {
+      throw new Error(
+        `expected baseline at ${baseline}; found instead: ${
+          JSON.stringify(listBaselines(join(appDataDir, "jobs"))) || "none"
+        }`,
+      );
     }
+    // It's valid JSON.
+    JSON.parse(readFileSync(baseline, "utf-8"));
   });
 
   it("real delete: removing hello.txt on A propagates the delete to B", async () => {
