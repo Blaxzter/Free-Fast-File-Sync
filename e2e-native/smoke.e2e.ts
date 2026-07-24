@@ -52,7 +52,10 @@ function findBaselineJson(root: string): string | undefined {
 }
 
 /** Evaluate an invoke inside the webview so we exercise the REAL command +
- * the app's real Zod parse path. Returned value is the raw JSON the engine sent. */
+ * the app's real Zod parse path. Returned value is the raw JSON the engine sent.
+ * Rejections are re-thrown as real Errors: Tauri commands reject with plain
+ * strings/objects, which WebDriver would otherwise report as an unreadable
+ * empty "javascript error: ". */
 async function invokeInApp<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   return browser.execute(
     (c, a) =>
@@ -60,7 +63,11 @@ async function invokeInApp<T>(cmd: string, args: Record<string, unknown>): Promi
         window as unknown as {
           __TAURI_INTERNALS__: { invoke: (cmd: string, args: unknown) => Promise<unknown> };
         }
-      ).__TAURI_INTERNALS__.invoke(c, a),
+      ).__TAURI_INTERNALS__
+        .invoke(c, a)
+        .catch((e: unknown) => {
+          throw new Error(typeof e === "string" ? e : JSON.stringify(e));
+        }),
     cmd,
     args,
   ) as Promise<T>;
@@ -115,6 +122,11 @@ describe("native smoke (real engine)", () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) throw new Error(parsed.error.message);
     expect(parsed.data.pairs.length).toBe(1);
+
+    // Release the parked preview through the same seam the UI's Cancel button
+    // uses. The single-slot RunRegistry HOLDS the slot after a successful
+    // preview; without this, every later preview in the suite would be Busy.
+    await invokeInApp("cancel_run", { runId: parsed.data.run_id });
   });
 
   it("real first-sync copy: hello.txt appears in B and baseline.json is written", async () => {

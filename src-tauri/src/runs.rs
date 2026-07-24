@@ -13,6 +13,14 @@
 //! (or unknown) id is a no-op and can never stop the active run. Runs are
 //! serialized today, so this is also structurally correct for the future
 //! watch/schedule fan-in.
+//!
+//! A run has two phases: RUNNING (a task is computing; the slot must outlive
+//! it) and HELD (preview finished, slot parked awaiting execute/cancel).
+//! `cancel` on a RUNNING run only signals the token — the task observes it and
+//! releases the slot itself when it winds down. `cancel` on a HELD run also
+//! releases the slot immediately: nothing is running, so nothing else ever
+//! would. Without that release, discarding a preview would leave the slot
+//! occupied until process exit and every later preview would be Busy.
 
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +47,10 @@ struct ActiveRun {
     job_id: String,
     pair_ids: Vec<String>,
     cancel: Arc<AtomicBool>,
+    /// False while a task is computing (RUNNING); true once the slot is merely
+    /// parked after a successful preview (HELD). Only a HELD slot may be
+    /// released synchronously by `cancel`.
+    held: bool,
 }
 
 /// What `execute_job` needs to re-drive a held run: its job, selected pairs, and
@@ -57,6 +69,19 @@ pub enum RunError {
     /// Another run already holds the pipeline. Carries the id of that run so the
     /// UI can address it (e.g. offer to cancel it).
     Busy { run_id: RunId },
+}
+
+/// What [`RunRegistry::cancel`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// No active run with that id (already finished, or never existed).
+    NotFound,
+    /// A RUNNING run's token was flipped; the task observes it and releases the
+    /// slot itself when it winds down.
+    Signalled,
+    /// A HELD run (parked post-preview) was cancelled AND its slot released —
+    /// the caller should emit `run://finished` for it, since no task will.
+    Released,
 }
 
 /// Handle returned to the caller that won the slot. Carries the minted `run_id`
@@ -126,8 +151,33 @@ impl RunRegistry {
             job_id: descriptor.job_id,
             pair_ids: descriptor.pair_ids,
             cancel: cancel.clone(),
+            held: false,
         });
         Ok(RunHandle { run_id, cancel })
+    }
+
+    /// Park the slot after a successful preview: the computation is over but the
+    /// run stays registered awaiting `execute_job` or `cancel`. No-op for an
+    /// unknown/stale id.
+    pub fn hold(&self, run_id: &str) {
+        let mut slot = self.inner.lock().unwrap();
+        if let Some(active) = slot.as_mut() {
+            if active.run_id == run_id {
+                active.held = true;
+            }
+        }
+    }
+
+    /// Re-arm a HELD run as RUNNING (execute is about to drive it): a cancel
+    /// during the apply must signal the loop, not yank the slot from under it.
+    /// No-op for an unknown/stale id.
+    pub fn resume(&self, run_id: &str) {
+        let mut slot = self.inner.lock().unwrap();
+        if let Some(active) = slot.as_mut() {
+            if active.run_id == run_id {
+                active.held = false;
+            }
+        }
     }
 
     /// Snapshot the active run's context IFF it matches `run_id`. Used by
@@ -145,18 +195,23 @@ impl RunRegistry {
             })
     }
 
-    /// Flip the cancel token of `run_id`. No-op for an unknown id (already
-    /// finished, or never existed). Returns `true` iff a matching active run was
-    /// found and flipped. Crucially this only ever touches the run named by
-    /// `run_id`, so cancelling one run cannot stop another.
-    pub fn cancel(&self, run_id: &str) -> bool {
-        let slot = self.inner.lock().unwrap();
+    /// Flip the cancel token of `run_id`; additionally release the slot when the
+    /// run is HELD (parked post-preview — no task will ever release it
+    /// otherwise). Crucially this only ever touches the run named by `run_id`,
+    /// so cancelling one run cannot stop another.
+    pub fn cancel(&self, run_id: &str) -> CancelOutcome {
+        let mut slot = self.inner.lock().unwrap();
         match slot.as_ref() {
             Some(active) if active.run_id == run_id => {
                 active.cancel.store(true, Ordering::Relaxed);
-                true
+                if active.held {
+                    *slot = None;
+                    CancelOutcome::Released
+                } else {
+                    CancelOutcome::Signalled
+                }
             }
-            _ => false,
+            _ => CancelOutcome::NotFound,
         }
     }
 
@@ -232,16 +287,18 @@ mod tests {
 
         let other_id = ulid::Ulid::new().to_string();
         assert_ne!(other_id, h.run_id);
-        let flipped = reg.cancel(&other_id);
-
-        assert!(!flipped, "cancel of a non-active id must report no-op");
+        assert_eq!(
+            reg.cancel(&other_id),
+            CancelOutcome::NotFound,
+            "cancel of a non-active id must report no-op"
+        );
         assert!(
             !h.is_cancelled(),
             "the active run's token must NOT be flipped by cancelling another id"
         );
 
-        // Cancelling the right id does flip it.
-        assert!(reg.cancel(&h.run_id));
+        // Cancelling the right id does flip it (RUNNING run => Signalled only).
+        assert_eq!(reg.cancel(&h.run_id), CancelOutcome::Signalled);
         assert!(h.is_cancelled());
     }
 
@@ -250,12 +307,54 @@ mod tests {
     fn cancel_unknown_run_is_noop() {
         let reg = RunRegistry::new();
         // No active run at all.
-        assert!(!reg.cancel("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert_eq!(
+            reg.cancel("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            CancelOutcome::NotFound
+        );
 
         // With an active run, an unrelated id is still a no-op.
         let h = reg.try_start(desc()).unwrap();
-        assert!(!reg.cancel("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert_eq!(
+            reg.cancel("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            CancelOutcome::NotFound
+        );
         assert!(!h.is_cancelled());
+    }
+
+    /// Discarding a parked preview frees the pipeline: cancel of a HELD run
+    /// releases the slot immediately (no task exists to do it later), and the
+    /// next preview can claim it. This is the UI's preview -> Cancel -> preview
+    /// flow; without the release every later preview would be Busy forever.
+    #[test]
+    fn cancel_on_held_run_releases_slot() {
+        let reg = RunRegistry::new();
+        let h = reg.try_start(desc()).unwrap();
+        reg.hold(&h.run_id);
+
+        assert_eq!(reg.cancel(&h.run_id), CancelOutcome::Released);
+        assert!(reg.active().is_none(), "held slot must be freed by cancel");
+        assert!(
+            reg.try_start(desc()).is_ok(),
+            "a fresh preview must win the slot after the held one was discarded"
+        );
+    }
+
+    /// `resume` re-arms a HELD run as RUNNING (execute took over): a cancel now
+    /// only signals the token and must NOT yank the slot from under the task.
+    #[test]
+    fn resume_rearms_held_run_for_execute() {
+        let reg = RunRegistry::new();
+        let h = reg.try_start(desc()).unwrap();
+        reg.hold(&h.run_id);
+        reg.resume(&h.run_id);
+
+        assert_eq!(reg.cancel(&h.run_id), CancelOutcome::Signalled);
+        assert!(h.is_cancelled());
+        assert_eq!(
+            reg.active().as_deref(),
+            Some(h.run_id.as_str()),
+            "the slot must stay held while the execute task winds down"
+        );
     }
 
     /// Many threads race to start; exactly one wins the slot, the rest see Busy.
