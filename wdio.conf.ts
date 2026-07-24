@@ -50,6 +50,10 @@ const APP_BINARY = join(
 // Must match the --remote-debugging-port baked in by tauri.e2e.conf.json.
 const CDP_PORT = 9222;
 
+// Where we run msedgedriver; `port` below must agree, or WDIO would dial a
+// different address than beforeSession starts the driver on.
+const DRIVER_PORT = 4444;
+
 // msedgedriver pinned to the runner's WebView2 Runtime (CI sets this); local
 // runs may have a matching one on PATH.
 const MSEDGEDRIVER = process.env.MSEDGEDRIVER_PATH ?? "msedgedriver";
@@ -66,22 +70,72 @@ writeFileSync(join(dirA, "hello.txt"), "hello from A\n");
 
 (globalThis as Record<string, unknown>).__E2E_SEED__ = { seedRoot, dirA, dirB };
 
-let appProcess: ChildProcess | undefined;
-let edgeDriver: ChildProcess | undefined;
+let appProcess: Spawned | undefined;
+let edgeDriver: Spawned | undefined;
 
-/** Poll a local TCP port until something listens on it. */
-function waitForPort(port: number, timeoutMs: number): Promise<void> {
+/** How long a spawned process gets to open its port. Generous on purpose: on a
+ * cold CI runner msedgedriver's own startup ("Starting…" → "was started
+ * successfully") has taken well over 15s — the first cut of this used 15s and
+ * flaked on exactly that. Waiting longer costs nothing when the port is up in
+ * two seconds, because the poll exits as soon as it connects. */
+const PORT_TIMEOUT_MS = 90_000;
+
+/** A spawned process plus its spawn failure, if any. `spawn` reports a failure
+ * to start (ENOENT, …) via an async 'error' event — throwing from that listener
+ * would escape the promise chain as an unhandled exception, so record it and
+ * let waitForPort surface it. */
+interface Spawned {
+  child: ChildProcess;
+  spawnError?: Error;
+}
+
+function spawnTracked(cmd: string, args: string[], stdio: "ignore" | "inherit"): Spawned {
+  const s: Spawned = {
+    child: spawn(cmd, args, {
+      stdio: stdio === "inherit" ? [null, process.stdout, process.stderr] : "ignore",
+    }),
+  };
+  s.child.on("error", (e) => {
+    s.spawnError = e;
+  });
+  return s;
+}
+
+/** Poll a local TCP port until something listens on it. Fails fast — without
+ * burning the whole timeout — if the process that was supposed to open it never
+ * started or has already exited. */
+function waitForPort(
+  port: number,
+  what: string,
+  proc: Spawned,
+  timeoutMs = PORT_TIMEOUT_MS,
+): Promise<void> {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const attempt = () => {
+      const { child, spawnError } = proc;
+      if (spawnError) {
+        reject(new Error(`failed to spawn ${what}: ${spawnError.message}`));
+        return;
+      }
+      if (child.exitCode !== null || child.signalCode !== null) {
+        reject(
+          new Error(
+            `${what} exited (code=${child.exitCode}, signal=${child.signalCode}) ` +
+              `before opening port ${port}`,
+          ),
+        );
+        return;
+      }
       const socket = connect({ port, host: "127.0.0.1" }, () => {
         socket.destroy();
         resolve();
       });
       socket.on("error", () => {
         socket.destroy();
-        if (Date.now() - started > timeoutMs) {
-          reject(new Error(`port ${port} did not open within ${timeoutMs}ms`));
+        const waited = Date.now() - started;
+        if (waited > timeoutMs) {
+          reject(new Error(`${what} did not open port ${port} within ${timeoutMs}ms`));
         } else {
           setTimeout(attempt, 250);
         }
@@ -100,7 +154,7 @@ export const config: WebdriverIO.Config = {
   // a driver for `browserName` itself; setting them marks the driver as
   // remote/user-managed so WDIO just connects.
   hostname: "127.0.0.1",
-  port: 4444,
+  port: DRIVER_PORT,
   path: "/",
   capabilities: [
     {
@@ -142,27 +196,29 @@ export const config: WebdriverIO.Config = {
     }
   },
 
-  // Boot the app (CDP enabled) + msedgedriver before the session.
+  // Boot the app (CDP enabled) + msedgedriver before the session. WDIO only
+  // LOGS a beforeSession rejection and then attempts the session anyway, so the
+  // real cause would otherwise be buried above a misleading "Unable to connect
+  // to 127.0.0.1:4444" — re-log it prominently before rethrowing.
   beforeSession: async () => {
-    appProcess = spawn(APP_BINARY, [], { stdio: "ignore" });
-    appProcess.on("error", (e) => {
-      throw new Error(`failed to spawn the app: ${e.message}`);
-    });
-    // The CDP port opens once the webview exists; only then can the driver attach.
-    await waitForPort(CDP_PORT, 30_000);
+    try {
+      appProcess = spawnTracked(APP_BINARY, [], "ignore");
+      // The CDP port opens once the webview exists; only then can a driver attach.
+      await waitForPort(CDP_PORT, `the app (${APP_BINARY})`, appProcess);
 
-    edgeDriver = spawn(MSEDGEDRIVER, ["--port=4444"], {
-      stdio: [null, process.stdout, process.stderr],
-    });
-    edgeDriver.on("error", (e) => {
-      throw new Error(`failed to spawn msedgedriver (${MSEDGEDRIVER}): ${e.message}`);
-    });
-    await waitForPort(4444, 15_000);
+      edgeDriver = spawnTracked(MSEDGEDRIVER, [`--port=${DRIVER_PORT}`], "inherit");
+      await waitForPort(DRIVER_PORT, `msedgedriver (${MSEDGEDRIVER})`, edgeDriver);
+    } catch (e) {
+      console.error(`\n[wdio] SESSION SETUP FAILED: ${(e as Error).message}\n`);
+      edgeDriver?.child.kill();
+      appProcess?.child.kill();
+      throw e;
+    }
   },
 
   afterSession: () => {
-    edgeDriver?.kill();
-    appProcess?.kill();
+    edgeDriver?.child.kill();
+    appProcess?.child.kill();
   },
 
   // NOTE: app/driver teardown lives in afterSession (worker process) — this
