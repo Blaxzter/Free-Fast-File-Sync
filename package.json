@@ -16,6 +16,7 @@
     "test:watch": "vitest",
     "e2e:mocked": "playwright test",
     "e2e:native": "wdio run wdio.conf.ts",
+    "e2e:native:build": "tauri build --debug --config src-tauri/tauri.e2e.conf.json",
     "gen:testdata": "node scripts/gen-testdata.mjs",
     "format": "biome check --write .",
     "format:check": "biome check ."

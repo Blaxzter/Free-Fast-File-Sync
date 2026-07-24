@@ -17,5 +17,8 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 
+# Editor-local state (per-dev window colors, etc.)
+.vscode/
+
 # Claude Code session-local state
 .claude/

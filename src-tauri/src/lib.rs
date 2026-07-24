@@ -533,7 +533,25 @@ async fn preview_job(
     .map_err(|e| SyncError::Other(format!("background task failed: {e}")));
 
     match result {
-        Ok(Ok(pairs)) => Ok(PreviewJobResult { run_id, pairs }),
+        Ok(Ok(pairs)) => {
+            if handle.is_cancelled() {
+                // The user cancelled while the scan was still computing (preview
+                // never observes the token mid-loop). Nothing will ever execute
+                // this run: release the slot now instead of parking it forever.
+                runs.finish(&run_id);
+                let _ = app.emit(
+                    "run://finished",
+                    RunFinished {
+                        run_id: run_id.clone(),
+                    },
+                );
+            } else {
+                // Park the slot: HELD until execute_job resumes it or cancel_run
+                // releases it.
+                runs.hold(&run_id);
+            }
+            Ok(PreviewJobResult { run_id, pairs })
+        }
         Ok(Err(e)) => {
             // The run is dead; release the slot so the user can retry.
             runs.finish(&run_id);
@@ -546,7 +564,6 @@ async fn preview_job(
             Err(e)
         }
     }
-    // NOTE: on success the slot stays HELD until execute_job/cancel_run.
 }
 
 /// Execute the run named by `run_id`. Re-loads the held run's job + selected
@@ -564,6 +581,9 @@ async fn execute_job(
 ) -> Result<ExecuteJobResult, SyncError> {
     let runs = state.runs.clone();
     let ctx = runs.context(&run_id).ok_or(SyncError::UnknownRun)?;
+    // Re-arm the parked (HELD) preview slot as RUNNING: a cancel during the
+    // apply must signal the loop below, not release the slot mid-write.
+    runs.resume(&run_id);
 
     let job = state.store.load(&ctx.job_id)?;
     let pair_ids = Some(ctx.pair_ids.clone());
@@ -700,10 +720,21 @@ async fn execute_job(
 }
 
 /// Cancel a specific run by id. Flips only that run's per-run token; an unknown
-/// id is a no-op. Returns `true` iff a matching active run was found.
+/// id is a no-op. A RUNNING run winds down on its own (its task emits
+/// `run://finished` when it releases the slot); a HELD run (parked post-preview)
+/// is released right here, so this command emits the event for it — otherwise
+/// the UI's run mirror would wait for a finish that never comes. Returns `true`
+/// iff a matching active run was found.
 #[tauri::command]
-fn cancel_run(run_id: String, state: State<'_, AppState>) -> bool {
-    state.runs.cancel(&run_id)
+fn cancel_run(app: tauri::AppHandle, run_id: String, state: State<'_, AppState>) -> bool {
+    match state.runs.cancel(&run_id) {
+        runs::CancelOutcome::NotFound => false,
+        runs::CancelOutcome::Signalled => true,
+        runs::CancelOutcome::Released => {
+            let _ = app.emit("run://finished", RunFinished { run_id });
+            true
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
