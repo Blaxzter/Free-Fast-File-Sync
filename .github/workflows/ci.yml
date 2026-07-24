@@ -167,9 +167,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --locked
-
       # Pin msedgedriver to the runner's installed Edge — the documented Windows
       # footgun: a mismatched driver makes the WebView2 session HANG. windows-
       # latest ships Edge + a matching msedgedriver under the Edge install dir;
@@ -234,72 +231,36 @@ jobs:
             }
           }
 
-      - name: Build the debug app (tauri build --debug)
-        run: pnpm tauri build --debug
+      # The E2E overlay bakes --remote-debugging-port=9222 into the webview so
+      # msedgedriver can ATTACH (ms:edgeOptions.debuggerAddress). Its "launch"
+      # mode — what tauri-driver uses — never completes its DevToolsActivePort
+      # handshake for Tauri v2 apps on these runners. NEVER add the overlay to
+      # a production build: it exposes CDP on a local port.
+      - name: Build the debug app (tauri build --debug, e2e overlay)
+        run: pnpm tauri build --debug --config src-tauri/tauri.e2e.conf.json
 
-      # Pure diagnostics for the DevToolsActivePort session failure: exercise
-      # each layer directly, bypassing tauri-driver. (A) does the app even start
-      # on the runner, (B) can msedgedriver attach to its WebView2 at all. The
-      # verbose driver log shows the exact launch command + the user-data dir it
-      # watches for DevToolsActivePort. Remove once the smoke is stably green.
-      - name: Probe app launch + direct WebView2 attach (diagnostics)
+      # Fast, decisive pre-check with crisp log output: app up + CDP reachable.
+      - name: Probe CDP attach surface (diagnostics)
         shell: pwsh
         continue-on-error: true
         run: |
           $exe = "$env:GITHUB_WORKSPACE\src-tauri\target\debug\fast-file-sync.exe"
-          Write-Host '=== A: bare app launch ==='
           $app = Start-Process -FilePath $exe -PassThru
-          Start-Sleep 12
+          Start-Sleep 10
           $app.Refresh()
           if ($app.HasExited) {
-            Write-Host "::warning::bare app EXITED within 12s, code=$($app.ExitCode)"
+            Write-Host "::warning::app EXITED within 10s, code=$($app.ExitCode)"
           } else {
-            Write-Host "bare app alive: pid=$($app.Id) mainWindowTitle='$($app.MainWindowTitle)'"
-            Get-Process msedgewebview2 -ErrorAction SilentlyContinue |
-              Select-Object Id, ProcessName | Format-Table | Out-String | Write-Host
+            Write-Host "app alive: pid=$($app.Id) title='$($app.MainWindowTitle)'"
+          }
+          try {
+            $v = Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 10
+            Write-Host "CDP reachable: $($v.Browser) / $($v.'User-Agent')"
+          } catch {
+            Write-Host "::warning::CDP NOT reachable on :9222 - $($_.Exception.Message)"
           }
           Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
           Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          Write-Host '--- WebView2 user-data dir the app actually used:'
-          $udfRoot = "$env:LOCALAPPDATA\com.fabraham.fastfilesync"
-          Get-ChildItem $udfRoot -Recurse -Depth 1 -ErrorAction SilentlyContinue |
-            Select-Object FullName | Out-String | Write-Host
-
-          Write-Host '=== B: direct msedgedriver webview2 session (no tauri-driver) ==='
-          $log = Join-Path $env:RUNNER_TEMP 'edgedriver-verbose.log'
-          $drv = Start-Process -FilePath $env:MSEDGEDRIVER_PATH -ArgumentList '--port=9515', "--log-path=$log", '--verbose' -PassThru
-          Start-Sleep 2
-          function Test-Webview2Session([string]$udf) {
-            $opts = @{ binary = $exe }
-            if ($udf) { $opts.webviewOptions = @{ userDataFolder = $udf } }
-            $caps = @{ capabilities = @{ alwaysMatch = @{
-              browserName      = 'webview2'
-              'ms:edgeOptions' = $opts
-            } } } | ConvertTo-Json -Depth 8
-            try {
-              $resp = Invoke-RestMethod -Uri 'http://127.0.0.1:9515/session' -Method Post -Body $caps -ContentType 'application/json' -TimeoutSec 120
-              Write-Host "SESSION OK (udf='$udf')"
-              $sid = $resp.value.sessionId
-              if ($sid) { Invoke-RestMethod -Uri "http://127.0.0.1:9515/session/$sid" -Method Delete | Out-Null }
-              return $true
-            } catch {
-              Write-Host "SESSION FAILED (udf='$udf'): $($_.Exception.Message)"
-              if ($_.ErrorDetails.Message) { Write-Host "BODY: $($_.ErrorDetails.Message)" }
-              return $false
-            } finally {
-              Get-Process msedgewebview2, fast-file-sync -ErrorAction SilentlyContinue |
-                Stop-Process -Force -ErrorAction SilentlyContinue
-            }
-          }
-          # B1: the folder Tauri passes programmatically (app local data dir).
-          # B2 fallback: its EBWebView subfolder, in case the driver watches the
-          # given path verbatim instead of appending EBWebView itself.
-          if (-not (Test-Webview2Session $udfRoot)) {
-            Test-Webview2Session "$udfRoot\EBWebView" | Out-Null
-          }
-          Stop-Process -Id $drv.Id -Force -ErrorAction SilentlyContinue
-          Write-Host '=== msedgedriver verbose log (tail) ==='
-          if (Test-Path $log) { Get-Content $log -Tail 200 | Write-Host } else { Write-Host 'no driver log written' }
 
       - name: Tier-2 WDIO native smoke
         run: pnpm e2e:native
