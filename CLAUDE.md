@@ -50,7 +50,13 @@ big-delete.
 - **Rust:** `cd src-tauri && cargo test` (unit suites + `tests/multi_pair.rs`)
 - **Frontend unit:** `pnpm test` (Vitest)
 - **E2E:** `pnpm e2e:mocked` (Playwright, mocked IPC, fast, cross-platform);
-  `pnpm e2e:native` (WDIO + tauri-driver, Windows-only)
+  `pnpm e2e:native:build && pnpm e2e:native` (WDIO over WebView2, Windows-only).
+  The native tier attaches to the app over CDP: the build overlay
+  `src-tauri/tauri.e2e.conf.json` bakes in `--remote-debugging-port`, and
+  `wdio.conf.ts` spawns app + msedgedriver and attaches via `debuggerAddress`.
+  msedgedriver MUST match the WebView2 Runtime's major version. Do NOT
+  reintroduce tauri-driver: its msedgedriver "launch" mode never completes the
+  DevToolsActivePort handshake for Tauri v2 here.
 - **Test data:** `pnpm gen:testdata` (`scripts/gen-testdata.mjs`) — throwaway two-folder
   fixtures under the OS temp dir.
 

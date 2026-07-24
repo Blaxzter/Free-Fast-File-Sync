@@ -11,9 +11,9 @@ on:
   # it is only ever exercised by the 03:17 cron and can rot unseen.
   workflow_dispatch:
 
-# Windows-first project: tauri-driver native E2E only runs on Windows/Linux and
-# never on macOS, so the whole matrix is windows-latest. macOS coverage comes
-# from the cross-platform Tier-1 Playwright suite + the Rust test suite.
+# Windows-first project: the native WebView2 E2E only runs on Windows (there is
+# no WKWebView driver), so the whole matrix is windows-latest. macOS coverage
+# comes from the cross-platform Tier-1 Playwright suite + the Rust test suite.
 defaults:
   run:
     shell: bash
@@ -136,10 +136,11 @@ jobs:
           retention-days: 7
 
   # ── Nightly / release: Tier-2 WDIO native (Windows-only, slow, flake-prone) ─
-  # Requires a full `tauri build --debug` + tauri-driver + a PINNED msedgedriver
-  # matched to the runner's Edge (else the session hangs). Does NOT gate PRs.
+  # Requires a full `tauri build --debug` with the E2E overlay (bakes in the CDP
+  # port) + a PINNED msedgedriver matched to the runner's WebView2 Runtime.
+  # WDIO attaches over CDP; see wdio.conf.ts. Does NOT gate PRs.
   native:
-    name: nightly Tier-2 (WDIO + tauri-driver)
+    name: nightly Tier-2 (WDIO native smoke)
     runs-on: windows-latest
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
@@ -186,18 +187,18 @@ jobs:
           )
           $found = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
           if (-not $found) {
-            # Last resort: let webdriverio-managed msedgedriver be fetched at runtime.
-            Write-Host "::warning::No preinstalled msedgedriver found; tauri-driver will try its default."
+            # Last resort: fall back to whatever msedgedriver is on PATH.
+            Write-Host "::warning::No preinstalled msedgedriver found; wdio.conf.ts will try PATH."
           } else {
             "MSEDGEDRIVER_PATH=$found" | Out-File -FilePath $env:GITHUB_ENV -Append
             Write-Host "Pinned msedgedriver: $found"
           }
 
-      # The windows-2025 runner images ship Edge + msedgedriver but NOT the
-      # WebView2 Evergreen Runtime the Tauri app embeds. Without it the app can
-      # never bring up its webview and msedgedriver dies after 60s with
-      # "session not created: DevToolsActivePort file doesn't exist".
-      - name: Ensure WebView2 Runtime (absent on windows-2025 images)
+      # The driver and the WebView2 Runtime the app embeds MUST share a major
+      # version or session creation fails. Today's images ship both (150.x), so
+      # the install branch is insurance against an image that drops the runtime;
+      # the version comparison is the part that earns its keep.
+      - name: Verify WebView2 Runtime matches msedgedriver
         shell: pwsh
         run: |
           $guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
@@ -232,35 +233,22 @@ jobs:
           }
 
       # The E2E overlay bakes --remote-debugging-port=9222 into the webview so
-      # msedgedriver can ATTACH (ms:edgeOptions.debuggerAddress). Its "launch"
-      # mode — what tauri-driver uses — never completes its DevToolsActivePort
-      # handshake for Tauri v2 apps on these runners. NEVER add the overlay to
-      # a production build: it exposes CDP on a local port.
+      # msedgedriver can ATTACH (ms:edgeOptions.debuggerAddress) instead of
+      # launching the app itself — its launch mode never completes the
+      # DevToolsActivePort handshake for Tauri v2 apps. NEVER build a release
+      # with this overlay: it exposes CDP on a local port.
       - name: Build the debug app (tauri build --debug, e2e overlay)
         run: pnpm tauri build --debug --config src-tauri/tauri.e2e.conf.json
 
-      # Fast, decisive pre-check with crisp log output: app up + CDP reachable.
-      - name: Probe CDP attach surface (diagnostics)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $exe = "$env:GITHUB_WORKSPACE\src-tauri\target\debug\fast-file-sync.exe"
-          $app = Start-Process -FilePath $exe -PassThru
-          Start-Sleep 10
-          $app.Refresh()
-          if ($app.HasExited) {
-            Write-Host "::warning::app EXITED within 10s, code=$($app.ExitCode)"
-          } else {
-            Write-Host "app alive: pid=$($app.Id) title='$($app.MainWindowTitle)'"
-          }
-          try {
-            $v = Invoke-RestMethod -Uri 'http://127.0.0.1:9222/json/version' -TimeoutSec 10
-            Write-Host "CDP reachable: $($v.Browser) / $($v.'User-Agent')"
-          } catch {
-            Write-Host "::warning::CDP NOT reachable on :9222 - $($_.Exception.Message)"
-          }
-          Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
-          Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
       - name: Tier-2 WDIO native smoke
         run: pnpm e2e:native
+
+      # The app and driver are spawned by wdio.conf.ts; if the suite dies before
+      # afterSession they would linger and wedge the next run on this runner.
+      - name: Reap stray app / driver processes
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          Get-Process fast-file-sync, msedgewebview2, msedgedriver -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+          exit 0
