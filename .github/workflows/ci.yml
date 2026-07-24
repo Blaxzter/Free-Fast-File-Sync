@@ -196,8 +196,51 @@ jobs:
             Write-Host "Pinned msedgedriver: $found"
           }
 
+      # The windows-2025 runner images ship Edge + msedgedriver but NOT the
+      # WebView2 Evergreen Runtime the Tauri app embeds. Without it the app can
+      # never bring up its webview and msedgedriver dies after 60s with
+      # "session not created: DevToolsActivePort file doesn't exist".
+      - name: Ensure WebView2 Runtime (absent on windows-2025 images)
+        shell: pwsh
+        run: |
+          $guid = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys = @(
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$guid",
+            "HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$guid",
+            "HKCU:\Software\Microsoft\EdgeUpdate\Clients\$guid"
+          )
+          function Get-WebView2Version {
+            $keys | ForEach-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv } |
+              Where-Object { $_ -and $_ -ne '0.0.0.0' } | Select-Object -First 1
+          }
+          $ver = Get-WebView2Version
+          if (-not $ver) {
+            Write-Host 'WebView2 Runtime missing - installing Evergreen runtime'
+            $exe = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $exe
+            Start-Process -FilePath $exe -ArgumentList '/silent', '/install' -Wait
+            $ver = Get-WebView2Version
+            if (-not $ver) { throw 'WebView2 Runtime install failed (no pv in registry)' }
+          }
+          Write-Host "WebView2 Runtime: $ver"
+          # The msedgedriver major MUST match the runtime major or the session fails.
+          if ($env:MSEDGEDRIVER_PATH) {
+            $drv = (& $env:MSEDGEDRIVER_PATH --version) -join ' '
+            Write-Host "msedgedriver: $drv"
+            $drvMajor = [int]($drv -replace '^\D*(\d+)\..*', '$1')
+            $rtMajor = [int]($ver.Split('.')[0])
+            if ($drvMajor -ne $rtMajor) {
+              Write-Host "::warning::msedgedriver major $drvMajor != WebView2 Runtime major $rtMajor - the session will likely fail"
+            }
+          }
+
       - name: Build the debug app (tauri build --debug)
         run: pnpm tauri build --debug
 
       - name: Tier-2 WDIO native smoke
+        env:
+          # WebView2 must be able to create its user-data dir; under the elevated
+          # runner context the per-app default can be unwritable, which also ends
+          # in the DevToolsActivePort session error. Point it somewhere safe.
+          WEBVIEW2_USER_DATA_FOLDER: ${{ runner.temp }}\webview2-data
         run: pnpm e2e:native
