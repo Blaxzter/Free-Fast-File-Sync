@@ -5,10 +5,14 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    # Nightly Tier-2 native E2E (Windows-only). 03:17 UTC.
-    - cron: "17 3 * * *"
-  # Lets the nightly-only Tier-2 job be run on demand from any branch — otherwise
-  # it is only ever exercised by the 03:17 cron and can rot unseen.
+    # Tier-2 native E2E, WEEKLY (Mondays 03:17 UTC) — not nightly. The suite runs
+    # on every PR, so the cron is not the regression gate; its job is to catch
+    # ENVIRONMENT drift (runner image, Edge / msedgedriver / WebView2 versions)
+    # that lands without a code change while the project is idle.
+    # NOTE: GitHub disables scheduled workflows in public repos after 60 days of
+    # repository inactivity — another reason the real guard hangs off PRs.
+    - cron: "17 3 * * 1"
+  # Run any job on demand from any branch (the Tier-2 suite in particular).
   workflow_dispatch:
 
 # Windows-first project: the native WebView2 E2E only runs on Windows (there is
@@ -135,14 +139,19 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # ── Nightly / release: Tier-2 WDIO native (Windows-only, slow, flake-prone) ─
+  # ── Tier-2 native smoke: the REAL app over WebView2 (Windows-only) ─────────
   # Requires a full `tauri build --debug` with the E2E overlay (bakes in the CDP
-  # port) + a PINNED msedgedriver matched to the runner's WebView2 Runtime.
-  # WDIO attaches over CDP; see wdio.conf.ts. Does NOT gate PRs.
+  # port) + a PINNED msedgedriver matched to the runner's WebView2 Runtime; WDIO
+  # attaches over CDP (see wdio.conf.ts).
+  #
+  # Runs on EVERY trigger, PRs included: it costs no wall-clock (~3-6 min,
+  # parallel to the longer `pr` job) and no money (public repo => free standard
+  # runners), and a Tier-2 failure caught after the merge is worth far less than
+  # one caught before it. This job previously ran on `schedule` only and rotted
+  # red for 17 straight nights without anyone noticing (see PR #3).
   native:
-    name: nightly Tier-2 (WDIO native smoke)
+    name: Tier-2 native smoke (WDIO + WebView2)
     runs-on: windows-latest
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
